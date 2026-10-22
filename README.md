@@ -1,7 +1,7 @@
 # KET family assessment mirror
 
 Parent phone/contact registration, multiple children per family, private cloud
-progress, objective source-key agreement and pending-review results.
+progress and administrator-only assessment results.
 
 Ordinary families do not need an email address or verification email. They enter
 a child display name and parent mobile number only. No participant password is required.
@@ -51,9 +51,14 @@ practice is excluded.
 Objective results mean agreement with reviewed local source keys, not official
 Cambridge scores. Writing, speaking and unlisted open-answer variants remain
 pending review, never fabricated zero scores. Source keys remain server-side.
-Whole-group submission opens the assessment report automatically. The report
-shows per-item source-key agreement, unanswered and pending items, plus provisional
-R1 next-group suggestions. It never calls GPT automatically or emits calibrated levels.
+Whole-group submission opens a server-confirmed receipt, never family-facing scores.
+The receipt shows submission success and Contact Teacher with an empty reserved QR
+area. No booking destination is configured. Family APIs, including the old /result
+URL, return only allowlisted save/submission receipt fields. Administrator-only
+queries retain scoring, raw responses and contact details. Family text/JSON exports
+are raw-response backups without grades or analysis. Saving errors do not display
+success. Result email delivery is NOT connected; mail-provider onboarding remains
+an external prerequisite and no email-sent claim appears in the child interface.
 RW2 keeps its authentic repeated three-person options with independent per-item selection.
 Initial registration fields render before the cloud probe completes; startup and
 HTTP waits are bounded with retry. Existing family records are not rebound to a
