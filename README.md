@@ -6,7 +6,8 @@ progress, objective source-key agreement and pending-review results.
 Ordinary families do not need an email address or verification email. They enter
 a child display name and parent mobile number only. No participant password is required.
 The device keeps a standard private session; another device uses a parent-held
-private resume link, generated on the signed-in family page. Links last 30 days;
+private resume link, generated on the signed-in family page. Same-device resume
+requires a valid family session, never a matching name alone. Links last 30 days;
 reissuing invalidates the old link for future use, not existing device sessions.
 The phone is self-reported contact information, not verified ownership or real-name
 identity. Knowing a number alone cannot retrieve historical records. Resume links must
@@ -24,7 +25,10 @@ saved privately through Supabase. A saved message requires a server revision
 acknowledgement. Concurrent edits do not silently overwrite another device.
 Ordinary parents can access only their own children. The explicitly approved
 operator can search parent phone and child, inspect actual responses and export
-CSV/JSON. This site stores assessment records; other-module practice is excluded.
+CSV/JSON. Child-facing copy/TXT/JSON exports omit parent contact metadata; owner-only
+management exports retain authorized contact information. Resume links/session tokens
+are excluded from every export. This site stores assessment records; other-module
+practice is excluded.
 
 Objective results mean agreement with reviewed local source keys, not official
 Cambridge scores. Writing, speaking and unlisted open-answer variants remain
