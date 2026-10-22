@@ -1168,8 +1168,9 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
   }
   function phoneValue(value) {
     const phone = typeof value === 'string' ? value.trim() : '';
-    if (!/^1[3-9]\d{9}$/.test(phone)) throw failure('INVALID_PHONE', '请填写 11 位家长手机号。');
-    return phone;
+    const compact = phone.replace(/[ ()-]/g, '');
+    if (phone.length > 40 || !/^[+0-9 ()-]+$/.test(phone) || !(/^1[3-9]\d{9}$/.test(compact) || /^\+[1-9]\d{7,14}$/.test(compact))) throw failure('INVALID_PHONE', '请填写家长手机号，国内11位或带+国家区号。');
+    return compact;
   }
   function childNameValue(value) {
     const name = typeof value === 'string' ? value.trim() : '';
@@ -1197,6 +1198,8 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
     } });
     if (!client || !client.auth) throw failure('SDK_UNAVAILABLE', '账号组件初始化失败。');
     const auth = client.auth, listeners = new Set(), controllers = new Set();
+    const registrationKey = 'ket-pending-family-registration-v1:' + project.hostname.split('.')[0];
+    let pendingRegistration = null;
     let closed = false, generation = 0, identity, authBusy = false, signingOut = false, callbackCheck = null;
     if (typeof opts.onSessionChange === 'function') listeners.add(opts.onSessionChange);
     function invalidate() { generation++; controllers.forEach(controller => controller.abort()); }
@@ -1268,10 +1271,10 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
       if (typeof path !== 'string') throw failure('API_PATH_NOT_ALLOWED', '不允许访问未配置的云端接口。');
       const itemPath = /^\/api\/children\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/record$/i.test(path);
       const resultPath = /^\/api\/children\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/result$/i.test(path);
-      const adminGet = path === '/api/admin/status', adminPost = ['/api/admin/results/query', '/api/admin/results/detail'].includes(path);
-      if (path !== '/api/session' && path !== '/api/children' && !itemPath && !resultPath && !adminGet && !adminPost) throw failure('API_PATH_NOT_ALLOWED', '不允许访问未配置的云端接口。');
+      const adminGet = path === '/api/admin/status', adminPost = ['/api/admin/results/query', '/api/admin/results/detail'].includes(path), familyLink = path === '/api/family/link';
+      if (path !== '/api/session' && path !== '/api/children' && !itemPath && !resultPath && !adminGet && !adminPost && !familyLink) throw failure('API_PATH_NOT_ALLOWED', '不允许访问未配置的云端接口。');
       const request = init || {}, method = String(request.method || 'GET').toUpperCase();
-      const allowed = path === '/api/session' || resultPath || adminGet ? ['GET'] : adminPost ? ['POST'] : path === '/api/children' ? ['GET', 'POST'] : ['GET', 'PUT'];
+      const allowed = path === '/api/session' || resultPath || adminGet ? ['GET'] : adminPost || familyLink ? ['POST'] : path === '/api/children' ? ['GET', 'POST'] : ['GET', 'PUT'];
       if (!allowed.includes(method)) throw failure('API_METHOD_NOT_ALLOWED', '该云端接口不支持此操作。');
       const headers = new root.Headers(request.headers || {});
       for (const name of headers.keys()) {
@@ -1341,7 +1344,7 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
           if (!response.ok) {
             const code = data && (typeof data.error === 'string' ? data.error : data.error && data.error.code);
             // Never forward a server exception containing aliases or credentials.
-            throw failure(typeof code === 'string' ? code : 'FAMILY_AUTH_FAILED', '手机号或续做密码未通过确认，请核对后重试。', response.status);
+            throw failure(typeof code === 'string' ? code : 'FAMILY_AUTH_FAILED', '家庭登记或私密续做未通过确认，请核对后重试。', response.status);
           }
           if (!data || !usableSession(data.session) || typeof data.session.refresh_token !== 'string' || !data.session.refresh_token || !data.user || data.user.id !== data.session.user.id) throw failure('INVALID_AUTH_RESPONSE', '登记或登录尚未取得完整会话，请重试。');
           const expected = { user: { id: data.user.id } };
@@ -1352,11 +1355,61 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
         } finally { controllers.delete(controller); }
       });
     }
-    async function familyRegister(phone, password, childName) {
-      return familyOperation('/api/family/register', { phone: phoneValue(phone), password: passwordValue(password, true), child_name: childNameValue(childName) });
+    function pendingRegistrationTicket(phone, childName) {
+      if (!pendingRegistration) {
+        try {
+          const raw = root.sessionStorage && root.sessionStorage.getItem(registrationKey);
+          if (typeof raw === 'string' && raw.length < 2048) {
+            const saved = JSON.parse(raw);
+            if (saved && /^[A-Za-z0-9_-]{43}$/.test(saved.ticket || '') && typeof saved.phone === 'string' && typeof saved.child_name === 'string') pendingRegistration = saved;
+          }
+        } catch (_) { /* The same page can still retry using RAM. */ }
+      }
+      if (pendingRegistration && pendingRegistration.phone === phone && pendingRegistration.child_name === childName) return pendingRegistration.ticket;
+      const cryptoApi = opts.crypto || root.crypto;
+      if (!cryptoApi || typeof cryptoApi.getRandomValues !== 'function') throw failure('REGISTRATION_RETRY_UNAVAILABLE', '当前浏览器无法安全登记，请使用正常浏览器打开。');
+      const bytes = cryptoApi.getRandomValues(new Uint8Array(32));
+      const ticket = root.btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      pendingRegistration = { phone, child_name: childName, ticket };
+      try { if (root.sessionStorage) root.sessionStorage.setItem(registrationKey, JSON.stringify(pendingRegistration)); } catch (_) { /* No durable retry claim. */ }
+      return ticket;
     }
-    async function familySignIn(phone, password) {
-      return familyOperation('/api/family/login', { phone: phoneValue(phone), password: passwordValue(password, false) });
+    function clearRegistrationTicket(ticket) {
+      if (pendingRegistration && pendingRegistration.ticket === ticket) pendingRegistration = null;
+      try {
+        const raw = root.sessionStorage && root.sessionStorage.getItem(registrationKey);
+        if (typeof raw === 'string' && JSON.parse(raw)?.ticket === ticket) root.sessionStorage.removeItem(registrationKey);
+      } catch (_) { /* Never expose a ticket or storage exception. */ }
+    }
+    async function familyRegister(phone, childName) {
+      const number = phoneValue(phone), name = childNameValue(childName), ticket = pendingRegistrationTicket(number, name);
+      const summary = await familyOperation('/api/family/register', { phone: number, child_name: name, registration_ticket: ticket });
+      clearRegistrationTicket(ticket);
+      return summary;
+    }
+    async function familyResume(ticket) {
+      if (typeof ticket !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(ticket)) throw failure('INVALID_RESUME_LINK', '家庭私密续做链接无效，请在原设备重新生成。');
+      // A public number alone never grants access. Do not silently replace a
+      // current family, even when a different private link is opened.
+      if (await readSession()) throw failure('EXISTING_FAMILY_SESSION', '当前设备已有家庭登录。请先保存并退出，再重新打开私密续做链接。');
+      return familyOperation('/api/family/resume', { ticket });
+    }
+    async function resumeFromUrl() {
+      assertOpen();
+      const hash = root.location && typeof root.location.hash === 'string' ? root.location.hash : '';
+      if (!hash.startsWith('#') || !hash.slice(1).split('&').some(part => part.split('=')[0] === 'family_resume')) return { status: 'NONE' };
+      let values;
+      try { values = new root.URLSearchParams(hash.slice(1)).getAll('family_resume'); }
+      catch (_) { values = []; }
+      // Remove capability from the address immediately, including on failure.
+      // If address cleanup is unavailable, do not exchange the capability.
+      try {
+        if (!root.history || typeof root.history.replaceState !== 'function' || typeof root.location.pathname !== 'string') throw new Error('Unavailable');
+        root.history.replaceState(null, '', root.location.pathname);
+      } catch (_) { throw failure('RESUME_URL_CLEANUP_FAILED', '无法清理私密链接，请刷新后重试或使用正常浏览器打开。'); }
+      if (values.length !== 1) throw failure('INVALID_RESUME_LINK', '家庭私密续做链接无效，请在原设备重新生成。');
+      await familyResume(values[0]);
+      return { status: 'RESUMED' };
     }
     async function signUp(email, password) {
       const address = emailValue(email), secret = passwordValue(password, true);
@@ -1428,7 +1481,7 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
       if (subscription && typeof subscription.unsubscribe === 'function') subscription.unsubscribe();
       if (typeof auth.stopAutoRefresh === 'function') auth.stopAutoRefresh();
     }
-    return { transport, session, callbackStatus, familyRegister, familySignIn, signUp, signIn, sendPasswordReset, resendSignup, updatePassword, signOut, onAuthStateChange, cleanup, close: cleanup };
+    return { transport, session, callbackStatus, familyRegister, familyResume, resumeFromUrl, signUp, signIn, sendPasswordReset, resendSignup, updatePassword, signOut, onAuthStateChange, cleanup, close: cleanup };
   }
   root.KetSupabase = { create };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.KetSupabase;
@@ -1445,7 +1498,8 @@ const CONFIG=JSON.parse(document.getElementById('cloudConfig').textContent);
 let parent=null,children=[],cloudLoading=true,cloudError='',cloudStatus={state:'idle'},cache=null,hydrating=false,cloudQueueError=null;
 let cloud=null,auth=null,authMode='signup',authBusy=false,authError='',authMessage='',authEmail='',authPhone='',authChildName='',recovery=false,authGeneration=0,startSequence=0,sessionIdentity=null,configurationError='',authLinkNotice='',callbackNoticeDismissed=false;
 let assessmentScope=null,currentResult=null,resultError='',adminAllowed=false,adminLoading=false,adminRows=[],adminDetail=null,adminError='',adminTotal=0,adminOffset=0,adminQuery={account:'',child:''},adminRequest=0;
-function updateAuthControls(){const button=$('#authSubmit');if(button){button.disabled=authBusy||!auth;button.textContent=authBusy?'正在处理…':authMode==='update'?'保存新密码':authMode==='signup'?'登记并选择孩子 →':'登录并继续 →';}}
+let resumeChecked=false,privateFamilyLink=null,familyLinkRequest=0;
+function updateAuthControls(){const button=$('#authSubmit');if(button){button.disabled=authBusy||!auth;button.textContent=authBusy?'正在处理…':authMode==='update'?'保存新密码':authMode==='signup'?'登记并选择孩子 →':'管理员登录 →';}}
 const retainedBackups=new Map();
 const retainedBackupRaw=new Map(),backupPrefix='ket-owner-session-backup-v1:';
 function ownerBackupPrefix(owner){return backupPrefix+encodeURIComponent(owner)+':';}
@@ -1492,6 +1546,7 @@ function detachAccount(){
   if(recording||pendingMic||stopping){Promise.resolve(recorder.cancel()).catch(()=>{});}recorder=KetLocal.createRecorder();
   recording=false;pendingMic=false;stopping=false;capture=null;parent=null;children=[];profile=null;model=null;cache=null;ui={};voiceRecords=[];exportCache=null;listeningSession=null;hydrating=false;cloudQueueError=null;cloudStatus={state:'idle'};view='profiles';assessmentScope=null;currentResult=null;resultError='';adminAllowed=false;adminLoading=false;adminRows=[];adminDetail=null;adminError='';adminTotal=0;adminOffset=0;adminQuery={account:'',child:''};adminRequest++;
   authPhone='';authChildName='';authEmail='';
+  privateFamilyLink=null;familyLinkRequest++;
   closeModal();$('#modalBody').textContent='';$('#identity').textContent='';$('#app').textContent='';
 }
 function authChanged(event,summary){
@@ -1512,11 +1567,14 @@ function configureAuth(){
 }
 function authErrorMessage(error){
   const messages={
-    INVALID_PHONE:'请填写11位家长手机号；它用于联系与归档，不是实名认证。',
+    INVALID_PHONE:'请填写家长手机号，国内11位或带+国家区号；它用于联系与归档，不是实名认证。',
     INVALID_CHILD_NAME:'请填写1—30个字符的孩子姓名或昵称。',
-    INVALID_REGISTRATION:'请核对手机号、孩子姓名和至少10个字符的续做密码。',
-    REGISTRATION_FAILED:'登记未完成。若这个手机号已登记，请改用“已有家庭继续”；忘记续做密码请联系管理员，不要重复登记。',
-    LOGIN_FAILED:'手机号或续做密码不正确，请核对。忘记密码请联系管理员，不要重复登记。',
+    INVALID_REGISTRATION:'请核对孩子姓名和家长手机号。',
+    REGISTRATION_FAILED:'登记未完成。若此前已登记，请回原设备继续，或在原设备生成家庭私密续做链接；不要重复登记。',
+    INVALID_RESUME_LINK:'家庭私密续做链接无效，请在原设备重新生成。',
+    RESUME_FAILED:'家庭私密续做链接已失效或无法使用，请在原设备重新生成。',
+    EXISTING_FAMILY_SESSION:'当前设备已有家庭登录。请先保存并退出当前家庭，再重新打开私密续做链接。',
+    RESUME_URL_CLEANUP_FAILED:'浏览器无法清理私密链接，请用正常浏览器重新打开，不要公开分享链接。',
     TOO_MANY_ATTEMPTS:'操作过于频繁，请稍候再试；不要连续提交。',
     FAMILY_AUTH_UNAVAILABLE:'家庭登记服务暂时不可用，请稍后重试。已有作答不会因此删除。',
     over_request_rate_limit:'请求过于频繁，请等待一段时间后再试。',
@@ -1524,7 +1582,7 @@ function authErrorMessage(error){
     invalid_credentials:'管理员邮箱或密码不正确，请核对已有管理员账号。',
     weak_password:'密码未满足账号安全要求。请换用至少10个字符、避免常见词或重复字符的新密码后再试。',
     INVALID_EMAIL:'请填写已有管理员账号邮箱。',
-    INVALID_PASSWORD:authMode==='signup'||authMode==='update'?'请设置至少10个字符的续做密码。':'请填写续做密码。',
+    INVALID_PASSWORD:authMode==='update'?'请设置至少10个字符的管理员密码。':'请填写管理员密码。',
     AUTH_BUSY:'上一项账号操作尚未完成，请稍候再试。',
     AUTH_SESSION_NOT_OBTAINED:'登录会话尚未取得，请重新登录。',
     STALE_AUTH_SCOPE:'账号状态已变化，请使用当前家长账号重新操作。',
@@ -1537,8 +1595,9 @@ async function startCloud(){
   const current=()=>seq===startSequence&&generation===authGeneration;
   try{
     if(!auth){cloudLoading=false;render();return;}
+    if(!resumeChecked){resumeChecked=true;try{await auth.resumeFromUrl();}catch(error){authLinkNotice=authErrorMessage(error);if(error.code==='EXISTING_FAMILY_SESSION'&&profile)modal('<h2>保留当前家庭</h2><p>'+esc(authLinkNotice)+'</p><button data-action="close">继续当前家庭</button>');}if(!current())return;}
     const callback=await auth.callbackStatus();if(!current())return;
-    if(!callbackNoticeDismissed&&callback.status==='LINK_ERROR')authLinkNotice='这条旧账号邮件链接已失效，可能已使用或过期。已有家庭请使用手机号和续做密码，管理员使用原账号登录。';
+    if(!callbackNoticeDismissed&&callback.status==='LINK_ERROR')authLinkNotice='这条旧管理员邮件链接已失效。已有家庭请在原设备继续，换设备使用家长保管的私密续做链接。';
     else if(!callbackNoticeDismissed&&callback.status==='INITIALIZATION_ERROR')authLinkNotice='账号验证暂未完成。请检查网络后刷新，或稍后重新登录；不要连续点击验证链接。';
     const summary=await auth.session();if(!current())return;
     if(!summary.authenticated){if(parent||profile||cloud)detachAccount();sessionIdentity=null;cloudLoading=false;render();return;}
@@ -1554,23 +1613,23 @@ async function startCloud(){
   if(!current())return;cloudLoading=false;render();
 }
 function authPage(){
-  const disabled=authBusy||!auth,updating=authMode==='update',signup=authMode==='signup',admin=authMode==='admin';
-  const title=updating?'设置新的管理员密码':admin?'已有管理员登录':signup?'登记孩子，开始测评':'已有家庭继续';
-  const identityInput=updating?'':admin?`<label for="authEmail">管理员邮箱<input class="field" id="authEmail" type="email" autocomplete="username" maxlength="254" value="${esc(authEmail)}" required ${disabled?'disabled':''}></label>`:`${signup?`<label for="authChildName">孩子姓名或昵称<input class="field" id="authChildName" autocomplete="off" maxlength="30" value="${esc(authChildName)}" required ${disabled?'disabled':''}></label>`:''}<label for="authPhone">家长手机号<input class="field" id="authPhone" type="tel" inputmode="tel" autocomplete="username" pattern="1[3-9][0-9]{9}" maxlength="11" value="${esc(authPhone)}" placeholder="11位手机号" required ${disabled?'disabled':''}></label>`;
-  const passwordInput=`<label for="authPassword">${signup?'设置续做密码（至少10个字符）':updating?'新密码（至少10个字符）':admin?'管理员密码':'续做密码'}<input class="field" id="authPassword" type="password" autocomplete="${signup||updating?'new-password':'current-password'}" ${signup||updating?'minlength="10"':''} maxlength="128" required ${disabled?'disabled':''}></label>${signup||updating?`<label for="authPasswordConfirm">再次输入密码<input class="field" id="authPasswordConfirm" type="password" autocomplete="new-password" minlength="10" maxlength="128" required ${disabled?'disabled':''}></label>`:''}`;
-  shell(`<div class="hero"><p class="eyebrow">YOUR FAMILY, YOUR PROGRESS</p><h1>记住孩子，接着做题。</h1><p class="muted">登记孩子姓名和家长手机号。同一家长可添加多个孩子，电脑和iPad用同一手机号与续做密码继续。</p></div><section class="card auth-card"><h2>${title}</h2>${authLinkNotice?`<p class="note" role="alert">${esc(authLinkNotice)}</p>`:''}${configurationError?`<p class="warning">${esc(configurationError)}</p>`:''}${authMessage?`<p class="quiet" role="status">${esc(authMessage)}</p>`:''}${authError?`<p class="warning" role="alert">${esc(authError)}</p>`:''}${cloudError?`<p class="warning">${esc(cloudError)}</p>`:''}<form id="authForm">${identityInput}${passwordInput}<button class="primary" id="authSubmit" type="submit" ${disabled?'disabled':''}>${authBusy?'正在处理…':updating?'保存新密码':signup?'登记并选择孩子 →':'登录并继续 →'}</button></form>${!updating?`<div class="row auth-nav"><button data-action="authSignin" ${disabled?'disabled':''}>已有家庭继续</button><button data-action="authSignup" ${disabled?'disabled':''}>首次登记孩子</button></div><p class="quiet">手机号仅作联系与归档，未经短信或实名验证。续做密码由家长保管，用于保护孩子记录；忘记密码请联系管理员，不要重复登记。同一家长添加其他孩子时无需再次登记手机号。</p><details class="source" ${admin?'open':''}><summary>平台管理员入口</summary><p>仅已有管理员账号使用。普通家庭不需要邮箱。</p><button data-action="authAdmin" ${disabled?'disabled':''}>使用已有管理员账号</button></details>`:'<p class="quiet">请由账号本人设置密码，不要发送密码给他人。</p>'}<p class="quiet">本页只保存测评记录，其他模块练习不计入成绩。不会要求孩子邮箱或身份证。</p></section>`,false);
+  const disabled=authBusy||!auth,updating=authMode==='update',signup=authMode==='signup',admin=authMode==='admin',resuming=authMode==='resume';
+  const title=updating?'设置新的管理员密码':admin?'已有管理员登录':signup?'登记孩子，开始测评':'换设备继续';
+  const identityInput=updating?'':admin?`<label for="authEmail">管理员邮箱<input class="field" id="authEmail" type="email" autocomplete="username" maxlength="254" value="${esc(authEmail)}" required ${disabled?'disabled':''}></label>`:`<label for="authChildName">孩子姓名或昵称<input class="field" id="authChildName" autocomplete="off" maxlength="30" value="${esc(authChildName)}" required ${disabled?'disabled':''}></label><label for="authPhone">家长手机号（国内或带+区号）<input class="field" id="authPhone" type="tel" inputmode="tel" autocomplete="tel" maxlength="40" value="${esc(authPhone)}" placeholder="国内手机号或+国家区号" required ${disabled?'disabled':''}></label>`;
+  const passwordInput=admin||updating?`<label for="authPassword">${updating?'新密码（至少10个字符）':'管理员密码'}<input class="field" id="authPassword" type="password" autocomplete="${updating?'new-password':'current-password'}" ${updating?'minlength="10"':''} maxlength="128" required ${disabled?'disabled':''}></label>${updating?`<label for="authPasswordConfirm">再次输入密码<input class="field" id="authPasswordConfirm" type="password" autocomplete="new-password" minlength="10" maxlength="128" required ${disabled?'disabled':''}></label>`:''}`:'';
+  shell(`<div class="hero"><p class="eyebrow">YOUR FAMILY, YOUR PROGRESS</p><h1>记住孩子，接着做题。</h1><p class="muted">只登记孩子姓名和家长手机号。同一家长可添加多个孩子；本机会自动记住家庭，换设备用家庭私密续做链接。</p></div><section class="card auth-card"><h2>${title}</h2>${authLinkNotice?`<p class="note" role="alert">${esc(authLinkNotice)}</p>`:''}${configurationError?`<p class="warning">${esc(configurationError)}</p>`:''}${authMessage?`<p class="quiet" role="status">${esc(authMessage)}</p>`:''}${authError?`<p class="warning" role="alert">${esc(authError)}</p>`:''}${cloudError?`<p class="warning">${esc(cloudError)}</p>`:''}${resuming?'<div class="note"><p>请在原设备打开本页，在孩子列表点击“生成家庭私密续做链接”，把链接只发给家长自己的另一台设备，然后在新设备打开。</p><p>手机号用于联系与归档，不能单凭手机号查看历史记录。请勿重复登记同一家庭；若原设备和私密链接都丢失，请联系管理员处理。</p></div>':`<form id="authForm">${identityInput}${passwordInput}<button class="primary" id="authSubmit" type="submit" ${disabled?'disabled':''}>${authBusy?'正在处理…':updating?'保存新密码':signup?'登记并选择孩子 →':'管理员登录 →'}</button></form>`}${!updating?`<div class="row auth-nav"><button data-action="authResume" ${disabled?'disabled':''}>已有家庭／换设备继续</button><button data-action="authSignup" ${disabled?'disabled':''}>首次登记孩子</button></div><p class="quiet">手机号仅作联系与归档，未经短信或实名验证。不要求邮箱或密码。请使用家长自己的设备；在共用设备用完后退出。私密续做链接只由家长保管，不要发到ChatGPT或公开。</p><details class="source" ${admin?'open':''}><summary>平台管理员入口</summary><p>仅已有管理员账号使用。普通家庭不需要邮箱或密码。</p><button data-action="authAdmin" ${disabled?'disabled':''}>使用已有管理员账号</button></details>`:'<p class="quiet">请由管理员本人设置密码，不要发送密码给他人。</p>'}<p class="quiet">本页只保存测评记录，其他模块练习不计入成绩。</p></section>`,false);
   updateAuthControls();
 }
 async function submitAuth(){
   if(authBusy||!auth)return;
   const mode=authMode,email=$('#authEmail')?.value||'',phone=$('#authPhone')?.value||'',childName=$('#authChildName')?.value||'',password=$('#authPassword')?.value||'',confirm=$('#authPasswordConfirm')?.value||'';
-  if((mode==='signup'||mode==='update')&&password!==confirm){authError='两次输入的密码不一致，请重新填写。';render();return;}
+  if(mode==='resume')return;
+  if(mode==='update'&&password!==confirm){authError='两次输入的密码不一致，请重新填写。';render();return;}
   if(mode==='admin')authEmail=email.trim();else{authPhone=phone.trim();authChildName=childName.trim()||authChildName;}authBusy=true;authError='';authMessage='';render();
   try{
-    if(mode==='signup'){await auth.familyRegister(phone,password,childName);await startCloud();}
-    else if(mode==='update'){await auth.updatePassword(password);recovery=false;authMode='signin';authMessage='密码已更新。';authLinkNotice='';callbackNoticeDismissed=true;await startCloud();}
+    if(mode==='signup'){await auth.familyRegister(phone,childName);await startCloud();}
+    else if(mode==='update'){await auth.updatePassword(password);recovery=false;authMode='admin';authMessage='管理员密码已更新。';authLinkNotice='';callbackNoticeDismissed=true;await startCloud();}
     else if(mode==='admin'){await auth.signIn(email,password);authLinkNotice='';callbackNoticeDismissed=true;await startCloud();}
-    else {await auth.familySignIn(phone,password);authLinkNotice='';callbackNoticeDismissed=true;await startCloud();}
   }catch(e){authError=authErrorMessage(e);}
   finally{authBusy=false;render();}
 }
@@ -1594,7 +1653,7 @@ function statusText(g){const d=currentState(g);return !d?'未开始':d.submitted
 async function openProfiles(){
   if(blockedNav()||!parent||!cloud||!queueCloud())return;
   const owner=parent.id,instance=cloud,generation=authGeneration;
-  try{await instance.flush();}catch(_){if(generation!==authGeneration||cloud!==instance)return;if(instance.getStatus().pendingDurable!==true){toast('尚未同步，且无法在本机持久备份。请先导出当前作答；本页不会清空或切换。');return;}toast('未同步的作答已保留为当前账号、孩子专属待同步记录。');}
+  try{if(profile&&model)await instance.flush();}catch(_){if(generation!==authGeneration||cloud!==instance)return;if(instance.getStatus().pendingDurable!==true){toast('尚未同步，且无法在本机持久备份。请先导出当前作答；本页不会清空或切换。');return;}toast('未同步的作答已保留为当前账号、孩子专属待同步记录。');}
   if(generation!==authGeneration||parent?.id!==owner||cloud!==instance)return;
   enterEpoch++;releaseURL();profile=null;model=null;cache=null;voiceRecords=[];exportCache=null;capture=null;listeningSession=null;ui={};view='profiles';currentResult=null;resultError='';assessmentScope=null;adminRequest++;adminLoading=false;adminRows=[];adminDetail=null;adminError='';adminTotal=0;
   try{const list=await instance.children();if(generation!==authGeneration||parent?.id!==owner||cloud!==instance)return;children=list;}catch(e){if(generation!==authGeneration)return;cloudError=e.message;}
@@ -1621,7 +1680,7 @@ function profilesPage(){
     if(sessionIdentity&&auth){shell(`<section class="card"><h1>账号已登录，作答空间尚未连通。</h1><p class="warning">${esc(cloudError||'请重试连接；尚未读取孩子或作答。')}</p><div class="row"><button class="primary" data-action="retryCloud">重新连接云端</button><button data-action="logoutPrepare">退出账号</button></div></section>`,false);return;}
     authPage();return;
   }
-  shell((authLinkNotice?'<section class="card note" role="alert">'+esc(authLinkNotice+' 当前已登录的家庭保持不变，请核对上方联系方式。')+'</section>':'')+`<div class="hero"><p class="eyebrow">YOUR FAMILY, YOUR PROGRESS</p><h1>今天，谁来探索英语？</h1><p class="muted">同一家长在电脑和iPad登录，可以继续云端已保存的测评。</p></div><section class="card"><h2>我的孩子</h2>${[...retainedBackups.values()].some(value=>value.parent_id===parent.id)?'<div class="note">此账号有上次登录变化时保留的作答备份。它不会自动覆盖云端。'+(hasVolatileBackups(parent.id)?'其中有仅在本页的临时备份，请先导出，暂勿关闭。':'')+'<button data-action="exportRetained">导出此账号备份</button></div>':''}<div class="profiles">${children.map(p=>`<button class="profile" data-action="enter" data-value="${esc(p.id)}">${esc(p.name)}<small>继续这个孩子的云端测评 →</small></button>`).join('')||'<p class="muted">还没有孩子档案。先添加一个姓名或昵称。</p>'}</div><form id="profileForm"><label for="profileName">再添加一个孩子（姓名或昵称）</label><div class="row"><input id="profileName" class="field" maxlength="30" autocomplete="off" placeholder="孩子姓名或昵称" required style="flex:1;min-width:180px"><button class="primary" type="submit">添加并进入 →</button></div></form><p class="quiet">一个家长可添加多个孩子，共用联系方式，每个孩子独立保存；同名也不会合并。无需再次登记手机号或孩子邮箱。旧本机档案不会自动导入。</p>${cloudError?`<p class="warning">${esc(cloudError)}</p><button data-action="retryCloud">重新连接</button>`:''}</section>`,false);}
+  shell((authLinkNotice?'<section class="card note" role="alert">'+esc(authLinkNotice+' 当前已登录的家庭保持不变，请核对上方联系方式。')+'</section>':'')+`<div class="hero"><p class="eyebrow">YOUR FAMILY, YOUR PROGRESS</p><h1>今天，谁来探索英语？</h1><p class="muted">同一家长在电脑和iPad登录，可以继续云端已保存的测评。</p></div><section class="card"><div class="row between"><h2>我的孩子</h2>${parent.contact_phone&&!adminAllowed?'<button data-action="familyLink">生成家庭私密续做链接</button>':''}</div>${[...retainedBackups.values()].some(value=>value.parent_id===parent.id)?'<div class="note">此账号有上次登录变化时保留的作答备份。它不会自动覆盖云端。'+(hasVolatileBackups(parent.id)?'其中有仅在本页的临时备份，请先导出，暂勿关闭。':'')+'<button data-action="exportRetained">导出此账号备份</button></div>':''}<div class="profiles">${children.map(p=>`<button class="profile" data-action="enter" data-value="${esc(p.id)}">${esc(p.name)}<small>继续这个孩子的云端测评 →</small></button>`).join('')||'<p class="muted">还没有孩子档案。先添加一个姓名或昵称。</p>'}</div><form id="profileForm"><label for="profileName">再添加一个孩子（姓名或昵称）</label><div class="row"><input id="profileName" class="field" maxlength="30" autocomplete="off" placeholder="孩子姓名或昵称" required style="flex:1;min-width:180px"><button class="primary" type="submit">添加并进入 →</button></div></form><p class="quiet">一个家长可添加多个孩子，共用联系方式，每个孩子独立保存；同名也不会合并。无需再次登记手机号或孩子邮箱。旧本机档案不会自动导入。</p>${cloudError?`<p class="warning">${esc(cloudError)}</p><button data-action="retryCloud">重新连接</button>`:''}</section>`,false);}
 function intro(){shell(`<div class="hero"><p class="eyebrow">BEFORE YOU BEGIN</p><h1>${esc(profile.name)}，先认识这次测评。</h1><p>你可以自由选择板块，一次只完成一组也可以。</p></div><section class="card"><h2>四种技能，按需测评</h2><div class="table-scroll"><table><thead><tr><th>官方A2 Key考试组件</th><th>官方安排</th><th>本页怎么做</th></tr></thead><tbody><tr><td>Reading & Writing</td><td>60分钟 · 7 Parts · 32题<br>总成绩占比50%</td><td>分成阅读、写作两个入口。7组阅读共44题；2项写作可单独做。</td></tr><tr><td>Listening</td><td>约30分钟 · 5 Parts · 25题<br>占比25%</td><td>第2套Part 2 · 5题配套录音与填空。</td></tr><tr><td>Speaking</td><td>通常两人8—10分钟 · 2 Parts<br>占比25%</td><td>看题口头回答，暂不要求录音反馈；不替代双人互动考试。</td></tr></tbody></table></div><p class="source">官方考试是三个组件，本页用四个技能入口。当前测评组合并非一套完整正式卷，不按44题换算官方成绩。官方安排：<a href="https://www.cambridgeenglish.org/exams-and-tests/qualifications/key/format/" target="_blank" rel="noopener noreferrer">Cambridge A2 Key考试说明</a>。</p></section><section class="card"><h2>你需要知道</h2><ul><li>阅读：一次看一道题，共享文章始终可以查看；整组提交前可以返回修改。</li><li>写作：邮件至少25词，三图故事至少35词。可打字，也可写在纸上后由家长把照片交给GPT。</li><li>听力：点击播放原录音，在共享表格里填写答案；本页保留整组材料。口语可以直接口头回答，录音留存可选，本轮不要求录音反馈。</li><li>未提交内容会尝试自动保存。提交会锁定本轮首次答案；答题卡不显示对错。</li><li>页面不自动评英语等级。已交客观题按本地源键核对；开放答案争议、写作和口语待评，不是官方KET成绩。写作审核参考Content、Organisation、Language维度。</li></ul><div class="note">请如实记录是否见过题目、是否有人帮助。计时从首次填写/点选到提交，不含之前阅读时间；它是时钟跨度，包含暂停和切换后台，不能当作专注用时。</div><button class="primary" data-action="introDone">看操作示例 →</button></section>`,false);}
 function tutorial(){shell(`<div class="hero"><p class="eyebrow">TRY THE CONTROLS</p><h1>先试一试，不计入作答。</h1></div><section class="card"><h3><span class="step">1</span>点选答案</h3><p>下面只练操作：请点一下B。</p><div class="choices" id="demoChoices">${['A','B','C'].map(x=>`<button class="choice" data-action="demoChoice"><span class="letter">${x}</span><span>操作示例 ${x}</span></button>`).join('')}</div><h3><span class="step">2</span>输入文字</h3><label>试着输入一个英文词<input class="field" id="demoWord" placeholder="输入后可以修改" autocomplete="off"></label><p class="muted" id="demoMessage">这些内容不会进入测评记录。</p></section><section class="card"><h3><span class="step">3</span>认识答题卡</h3><div class="numbers"><button disabled>7</button><button class="done" disabled>8</button><button class="locked" disabled>9</button></div><p class="muted">白色：未作答 · 浅绿：已作答 · 锁定色：已提交<br>正式答题时可以点题号返回。整组提交前会再次确认空题。</p><h3><span class="step">4</span>听力和提交</h3><p>听力按“播放原录音 → 填写5个空 → 检查并提交”。口语先看题口头回答，不要求录音反馈。最后到“保存与导出”复制文字或下载JSON，交给家长/GPT分析。</p><button class="primary" data-action="tutorialDone">明白了，选择板块 →</button></section>`,false);}
 function home(){shell(`<div class="hero"><p class="eyebrow">HELLO, ${esc(profile.name)}</p><h1>今天想测哪一块？</h1><p class="muted">不必一次做完。下次选择同一个名字，就能继续云端已保存的进度。</p></div><div class="grid">${[['Listening','🎧','听力','第2套Part 2 · 原录音与完整5题'],['Speaking','💬','口语','看题口头回答 · 暂不要求录音反馈'],['Reading','📖','阅读','7组 · 44题 · 逐题作答'],['Writing','✍️','写作','邮件与三图故事 · 打字或手写']].map(([m,i,n,s])=>`<button class="module" data-action="module" data-value="${m}"><span class="icon">${i}</span><b>${m} ${n}</b><small>${s}</small></button>`).join('')}</div><section class="card"><div class="row between"><h3>准备好再开始</h3><div class="row"><button data-action="intro">考试介绍</button><button data-action="tutorial">操作示例</button><button data-action="report">我的作答与导出</button></div></div><p>阅读首轮从R1开始；若见过R1或答案，选R2。完成整组后把作答交给GPT，再决定下一组。</p></section>`);}
@@ -1647,7 +1706,7 @@ function numberButtons(g,d){return g.questions.map((q,i)=>`<button data-action="
 function writing(g,d){const locked=!!d.submitted;return `<section class="card"><h2>${esc(g.title)}</h2><p class="question">${esc(g.instruction)}</p>${paragraphs(g)}${g.writing_image?`<img class="original-image story" src="${g.writing_image}" alt="原题三幅完整故事图片，按从左到右顺序">`:''}${g.ref==='W1'?`<p>${esc(g.writing.prompt)} <b>Write ${g.minimum_words} words or more.</b></p>`:''}<div class="row"><button data-action="writingMode" data-value="typing" class="${d.writing_mode==='typing'?'primary':''}" ${locked?'disabled':''}>网页打字</button><button data-action="writingMode" data-value="paper" class="${d.writing_mode==='paper'?'primary':''}" ${locked?'disabled':''}>纸上手写</button></div><div class="divider"></div>${d.writing_mode==='typing'?`<label for="writingText">Your writing</label><textarea id="writingText" class="field writing" placeholder="Write your answer here…" ${locked?'disabled':''} spellcheck="false">${esc(d.writing_text)}</textarea><p class="wordcount" id="wordCount">${words(d.writing_text)} words · 原题要求至少${g.minimum_words}词</p>`:`<div class="quiet"><p>把答案写在纸上。由家长在ChatGPT另行上传照片；网页不接收照片，不识别手写。</p><label><input id="paperReady" type="checkbox" ${d.paper_ready?'checked':''} ${locked?'disabled':''}> 我已在纸上写好，照片待家长上传</label></div>`}<button class="primary" data-action="review">${locked?'查看提交记录':'检查与提交'}</button>${source(g)}</section>`;}
 function words(s){return s.trim()?s.trim().split(/\s+/).length:0;}
 function modal(content){$('#modalBody').innerHTML=content;if(!$('#modal').open)$('#modal').showModal();}
-function closeModal(){$('#modal').close();}
+function closeModal(){privateFamilyLink=null;familyLinkRequest++;$('#modal').close();$('#modalBody').textContent='';}
 function contextSelect(name,label,value,options,locked){return `<label>${label}<select class="field" data-context="${name}" ${locked?'disabled':''}>${options.map(([v,t])=>`<option value="${v}" ${value===v?'selected':''}>${t}</option>`).join('')}</select></label>`;}
 function review(){const g=find(ref),d=model.draft(ref),n=countAnswered(g,d);modal(`<h2>${ref} · ${d.submitted?'首次提交已锁定':'检查后再提交'}</h2><p>已填写 ${n}/${g.question_numbers.length} 项。${g.component==='Writing'&&d.writing_mode==='paper'&&d.paper_ready?'已自报手写完成，正文尚未收到，照片待家长上传。':''}</p>${g.component!=='Writing'?`<div class="numbers">${numberButtons(g,d)}</div>`:''}<p class="muted">${g.component==='Listening'?'这是听力首次答案提交；播放器事件和答案分别保存，不自动判断已听见或听懂。 ':''}${n<g.question_numbers.length?'仍有未作答或待附件项目；可以返回补齐，也可以如实提交当前记录。':'页面只确认已填写，不判断对错。'}</p><div class="context">${contextSelect('seen','以前见过这组题或答案吗？',d.context.seen,[['unknown','不确定'],['no','没有见过'],['yes','见过题目或答案']],!!d.submitted)}${contextSelect('help','这次获得帮助了吗？',d.context.help,[['unknown','不确定'],['none','独立作答，未获帮助'],['instructions_only','只解释了操作/指令'],['content_help','解释、提示、翻译或其他帮助']],!!d.submitted)}${contextSelect('effort','完成条件',d.context.effort,[['unknown','未记录'],['usual','通常状态'],['tired','疲劳或分心'],['interrupted','中途暂停或被打断']],!!d.submitted)}</div><label>补充说明<input id="contextNotes" class="field" value="${esc(d.context.notes)}" ${d.submitted?'disabled':''}></label><div class="note">提交锁定本轮首次作答，并保存到这个孩子的云端记录；不自动生成官方KET分数。${d.submitted?'提交时间：'+date(d.submitted.submitted_at):'请先确认选择的是自己的孩子档案。'}</div><div class="row"><button data-action="close">返回查看</button>${d.submitted?'<button class="primary" data-action="report">去导出 →</button>':'<button class="primary" data-action="submitGroup">确认提交本组</button>'}</div>`);}
 function card(){const state=model.getState();modal(`<h2>${esc(profile.name)}的答题卡</h2><p class="muted">只显示进度，不显示参考答案。</p>${allTasks.map(g=>{const d=state.groups[g.ref];return `<div style="margin:15px 0"><div class="row between"><b>${g.ref} · Test ${g.test} / Part ${g.part}</b><small>${statusText(g)}</small></div><div class="numbers">${g.question_numbers.map((n,i)=>`<button data-action="cardJump" data-ref="${g.ref}" data-value="${i}" class="${d?.submitted?'locked ':''}${d&&(d.answers[n]||g.component==='Writing'&&d.writing_text.trim())?'done':'blank'}" aria-label="${g.ref}第${n}题">${n}</button>`).join('')}</div></div>`;}).join('')}<button data-action="close">关闭答题卡</button>`);}
@@ -1710,7 +1769,26 @@ function adminExport(kind){
   if(rows.length===1)rows.push([adminDetail.contact_phone,adminDetail.child.name,'','','待评','','','','','','尚无可核对的测评结果']);
   download(new Blob(['\ufeff'+rows.map(r=>r.map(csvCell).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}),'KET-'+adminDetail.child.id+'-results.csv');
 }
+async function createFamilyLink(){
+  if(!parent?.contact_phone||adminAllowed||!auth)return;
+  const owner=parent.id,generation=authGeneration,request=++familyLinkRequest;
+  const current=()=>parent?.id===owner&&generation===authGeneration&&request===familyLinkRequest&&!adminAllowed;
+  privateFamilyLink=null;modal('<h2>正在生成家庭私密续做链接…</h2><p>请稍候。链接只由家长保管，不会写入测评作答。</p><button data-action="close">取消显示</button>');
+  try{
+    const data=await protectedJSON('/api/family/link',{});if(!current())return;
+    if(!/^[A-Za-z0-9_-]{43}$/.test(data.ticket||'')||!Number.isFinite(Date.parse(data.expires_at))||Date.parse(data.expires_at)<=Date.now())throw new Error('INVALID_FAMILY_LINK');
+    const url=new URL(CONFIG.siteUrl);url.search='';url.hash='family_resume='+data.ticket;
+    privateFamilyLink={owner,href:url.href,expires_at:data.expires_at};
+    modal(`<h2>家庭私密续做链接</h2><p>在电脑或iPad打开这条链接，即可继续这个家庭的测评。仅由家长自己保存；拿到完整链接的人可以进入本家庭。</p><label for="privateFamilyLink">私密链接<textarea class="field" id="privateFamilyLink" readonly autocomplete="off" spellcheck="false" style="min-height:110px;overflow-wrap:anywhere">${esc(privateFamilyLink.href)}</textarea></label><p>兑换有效期至${esc(date(data.expires_at))}（约30天）。重新生成会撤销旧链接，已登录设备保持登录；这不是30天后自动退出。</p><p class="note">不要发到ChatGPT、公开网页或无关人员。复制到家长自己的另一台设备使用，不需要邮箱或密码。</p><div class="row"><button class="primary" data-action="copyFamilyLink">复制私密链接</button><button data-action="close">已保管，关闭</button></div><p id="familyLinkMessage" role="status"></p>`);
+  }catch(_){if(current()){privateFamilyLink=null;modal('<h2>私密链接暂未生成</h2><p>请保持当前设备登录，稍后重试。手机号本身不能恢复家庭记录。</p><button data-action="close">返回</button>');}}
+}
+async function copyFamilyLink(){
+  const saved=privateFamilyLink,generation=authGeneration;if(!saved||saved.owner!==parent?.id||!$('#modal').open)return;
+  try{await navigator.clipboard.writeText(saved.href);if(privateFamilyLink===saved&&generation===authGeneration&&saved.owner===parent?.id)$('#familyLinkMessage').textContent='已复制，请只在家长自己的设备打开。';}
+  catch(_){if(privateFamilyLink!==saved||generation!==authGeneration||saved.owner!==parent?.id)return;const field=$('#privateFamilyLink');field.focus();field.select();$('#familyLinkMessage').textContent='自动复制未获允许，已选中链接，请手动复制并私密保存。';}
+}
 const actions={
+familyLink:createFamilyLink,copyFamilyLink,
 async admin(){if(blockedNav()||!parent||!adminAllowed)return;const owner=parent.id;await openProfiles();if(parent?.id!==owner||profile||!adminAllowed)return;view='admin';render();await queryAdmin(0);},
 adminPrev(){return queryAdmin(Math.max(0,adminOffset-50));},adminNext(){return queryAdmin(adminOffset+50);},adminDetail:b=>loadAdminDetail(b.dataset.value),adminListCsv(){adminExport('list');},adminDetailJson(){adminExport('json');},adminDetailCsv(){adminExport('csv');},
 async retryCloud(){cloudLoading=true;cloudError='';render();await startCloud();},
@@ -1724,7 +1802,7 @@ async reloadCloud(){
   closeModal();
   if(child){profile=null;model=null;await enter(child);}else if(opened?.childId){await enter(opened.childId);}else{view='profiles';render();toast('本机待同步备份已保留，请再次选择孩子读取云端版本。');}
 },
-authSignin(){if(authBusy)return;authMode='signin';authError='';authMessage='';render();},
+authResume(){if(authBusy)return;authMode='resume';authError='';authMessage='';render();},
 authSignup(){if(authBusy)return;authMode='signup';authError='';authMessage='';render();},
 authAdmin(){if(authBusy)return;authMode='admin';authError='';authMessage='';render();},
 async logoutPrepare(){
@@ -1733,11 +1811,11 @@ async logoutPrepare(){
   if(ok&&profile&&instance){try{await instance.flush();}catch(_){ok=false;}}
   if(generation!==authGeneration)return;
   if(!ok&&(cloudQueueError||instance?.getStatus().pendingDurable!==true)){modal('<h2>请先保留当前作答</h2><p>云端未确认，且本机无法持久保存。本页暂不清空账号；请先下载备份，再恢复连接。</p><button data-action="exportPending">导出当前作答备份</button><button data-action="close">返回继续</button>');return;}
-  modal(`<h2>退出家长账号</h2><p>${ok?'云端已确认的作答下次登录可继续。':'仍有未同步作答，已按当前家长和孩子保留在本机；请先导出备份。'}</p><p>退出会清空本页孩子与作答显示；不会删除其他设备会话或本机旧记录。</p><div class="row">${!ok?'<button data-action="exportPending">导出未同步备份</button>':''}<button class="primary" data-action="confirmLogout">确认退出</button><button data-action="close">继续使用</button></div>`);
+  modal(`<h2>退出当前家庭</h2><p>${ok?'云端已确认的作答已保存。家庭再次进入需使用私密续做链接；请先确认已保管链接。':'仍有未同步作答，已按当前家长和孩子保留在本机；请先导出备份。'}</p><p>退出会清空本页孩子与作答显示；不会删除其他设备会话或本机旧记录。</p><div class="row">${!ok?'<button data-action="exportPending">导出未同步备份</button>':''}<button class="primary" data-action="confirmLogout">确认退出</button><button data-action="close">继续使用</button></div>`);
 },
 async confirmLogout(){
   if(authBusy||!auth)return;authBusy=true;
-  try{await auth.signOut();if(parent||profile||cloud){authGeneration++;detachAccount();}sessionIdentity=null;recovery=false;authMode='signin';authMessage='已退出这个浏览器的家长账号。';authError='';closeModal();}
+  try{await auth.signOut();if(parent||profile||cloud){authGeneration++;detachAccount();}sessionIdentity=null;recovery=false;authMode='signup';authMessage='已退出这个浏览器的家庭。再次进入请打开家长保管的私密续做链接。';authError='';closeModal();}
   catch(e){toast(authErrorMessage(e));}
   finally{authBusy=false;cloudLoading=false;render();}
 },
@@ -1764,6 +1842,7 @@ document.addEventListener('input',guarded(e=>{const t=e.target;if(['authEmail','
 document.addEventListener('change',guarded(async e=>{const t=e.target;if(t.id==='groupSelect'){ref=t.value;qi=Number(ui['q_'+ref])||0;render();}if(t.id==='speakSelect'){if(blockedNav()){t.value=ref;return;}ref=t.value;qi=0;render();}if(t.dataset.context){model.setContext(ref,{[t.dataset.context]:t.value});saveStatus();}if(t.id==='paperReady'){model.start(ref);model.setPaperReady(ref,t.checked);saveStatus();}if(t.id==='audioFile'&&t.files[0]){const f=t.files[0];if(!/^audio\//.test(f.type)&&! /\.(m4a|mp3|wav|webm|ogg|mp4)$/i.test(f.name)){toast('请选择实际音频文件。');t.value='';return;}if(f.size>100*1024*1024){toast('音频大于100MB，请先缩短录音；当前文件未保存。');return;}const p=profile.id,task=ref,question=voiceQuestion();const r=await voice.saveDraft({profileId:p,taskRef:task,questionRef:question,blob:f,mimeType:f.type,fileName:f.name,durationSeconds:null});if(profile?.id===p&&ref===task&&voiceQuestion()===question){await refreshVoice();render();toast(r.message);}}}));
 window.addEventListener('beforeunload',e=>{if(recording||pendingMic||stopping||hasVolatileBackups()||['pending','offline','conflict'].includes(cloudStatus.state)){e.preventDefault();e.returnValue='仍有未同步内容或仅在本页的备份，请先保存或导出。';}});
 window.addEventListener('pageshow',()=>{if(!parent&&!profile)updateAuthControls();});
+window.addEventListener('hashchange',()=>{resumeChecked=false;startCloud();});
 window.addEventListener('pagehide',()=>{if(model)model.save();if(recorder.isRecording())recorder.cancel();clearInterval(timer);releaseURL();});
 configureAuth();render();startCloud();
 })();

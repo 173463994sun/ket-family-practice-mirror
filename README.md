@@ -4,9 +4,13 @@ Parent phone/contact registration, multiple children per family, private cloud
 progress, objective source-key agreement and pending-review results.
 
 Ordinary families do not need an email address or verification email. They enter
-a child display name, parent mobile number and a privately kept resume password.
+a child display name and parent mobile number only. No participant password is required.
+The device keeps a standard private session; another device uses a parent-held
+private resume link, generated on the signed-in family page. Links last 30 days;
+reissuing invalidates the old link for future use, not existing device sessions.
 The phone is self-reported contact information, not verified ownership or real-name
-identity. Knowing a number alone cannot retrieve records or reset a password.
+identity. Knowing a number alone cannot retrieve historical records. Resume links must
+remain with the family and are never included in answer exports or public logs.
 The existing owner's administrator account has a separate collapsed login.
 
 Content preserved: seven native-text reading groups / 44 questions, two writing
