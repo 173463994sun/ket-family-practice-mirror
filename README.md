@@ -11,7 +11,8 @@ reissuing invalidates the old link for future use, not existing device sessions.
 The phone is self-reported contact information, not verified ownership or real-name
 identity. Knowing a number alone cannot retrieve historical records. Resume links must
 remain with the family and are never included in answer exports or public logs.
-The existing owner's administrator account has a separate collapsed login.
+The existing owner has a separate administrator entrance at ?view=admin.
+The child entrance never displays the administrator search table or contacts.
 
 Content preserved: seven native-text reading groups / 44 questions, two writing
 tasks with required images, one Test 2 Listening Part 2 group / five questions
