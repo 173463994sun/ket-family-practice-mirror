@@ -14,6 +14,9 @@ identity. Knowing a number alone cannot retrieve historical records. Resume link
 remain with the family and are never included in answer exports or public logs.
 The existing owner has a separate administrator entrance at ?view=admin.
 The child entrance never displays the administrator search table or contacts.
+The default child entrance shows only child name, parent mobile number and Start.
+Existing/new family classification is internal; recovery help appears only after
+an actual error, and detailed family guidance stays in collapsed parent settings.
 
 Content preserved: seven native-text reading groups / 44 questions, two writing
 tasks with required images, one Test 2 Listening Part 2 group / five questions
