@@ -26,7 +26,17 @@ allow a safe sign-out followed by private-link resume without losing the latest 
 Content preserved: seven native-text reading groups / 44 questions, two writing
 tasks with required images, one Test 2 Listening Part 2 group / five questions
 with the already authorized 241-second source recording, and real speaking
-prompts/pictures. Speaking recording remains optional and device-local.
+prompts/pictures. The speaking recorder is visible with an environment reminder,
+and supports stop, replay, local first-submission lock and audio export.
+Recording remains device-local; automatic transcription is not connected.
+Writing accepts camera/album photos, normalizes them to bounded JPEGs without
+original EXIF, and saves them privately in the existing child response. A
+submitted writing image cannot be replaced. Photos remain pending human review;
+no OCR or external AI service is enabled. Child text/JSON exports carry image
+metadata; the image itself can be downloaded separately.
+Complete groups submit directly. Incomplete groups show only missing question
+numbers plus Back/Submit. Answer cards and exposure/help surveys are removed.
+Omitted conditions remain unknown; they are not silently set to independent.
 
 Per-child drafts, first submitted answers, source references and conditions are
 saved privately through Supabase. A saved message requires a server revision
