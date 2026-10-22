@@ -41,8 +41,13 @@ practice is excluded.
 Objective results mean agreement with reviewed local source keys, not official
 Cambridge scores. Writing, speaking and unlisted open-answer variants remain
 pending review, never fabricated zero scores. Source keys remain server-side.
-Next-group selection continues through parent/GPT review of complete-group
-responses and conditions; no calibrated adaptive algorithm is claimed.
+Whole-group submission opens the assessment report automatically. The report
+shows per-item source-key agreement, unanswered and pending items, plus provisional
+R1 next-group suggestions. It never calls GPT automatically or emits calibrated levels.
+RW2 keeps its authentic repeated three-person options with independent per-item selection.
+Initial registration fields render before the cloud probe completes; startup and
+HTTP waits are bounded with retry. Existing family records are not rebound to a
+new phone by opening the separate registration entrance in family settings.
 
 Public source display follows the owner's existing publication authorization;
 this is not publisher licence certification or an official Cambridge service.
