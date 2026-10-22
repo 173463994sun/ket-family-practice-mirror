@@ -17,6 +17,11 @@ The child entrance never displays the administrator search table or contacts.
 The default child entrance shows only child name, parent mobile number and Start.
 Existing/new family classification is internal; recovery help appears only after
 an actual error, and detailed family guidance stays in collapsed parent settings.
+Adding a confusing duplicate name asks for a distinct nickname instead of merging
+children. A lost session or expired link opens contextual recovery. After a 401,
+new inputs can be backed up only within the previously loaded family/child scope;
+network reads and saves still require authentication. Confirmed local backups
+allow a safe sign-out followed by private-link resume without losing the latest draft.
 
 Content preserved: seven native-text reading groups / 44 questions, two writing
 tasks with required images, one Test 2 Listening Part 2 group / five questions

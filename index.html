@@ -1031,7 +1031,14 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
       }
     }
     function queue(payload) {
-      const scope = requireScope();
+      // After a 401, keep accepting edits only into this previously verified,
+      // fully loaded owner/child's local backup. This is not renewed network
+      // authority: all reads, flushes and child changes still requireAuth().
+      if (closed) throw failure('CLOSED', '云端连接已关闭，请重新登录。');
+      if (!user) throw failure('AUTH_REQUIRED', '请先登录家长账号。', 401);
+      const scope = authenticated ? requireScope() : active;
+      if (!scope || scope.parentId !== user.id) throw failure(authenticated ? 'CHILD_REQUIRED' : 'AUTH_REQUIRED', '请先选择已验证家庭下的孩子。', authenticated ? undefined : 401);
+      if (!scope.loaded) throw failure('RECORD_NOT_LOADED', '云端记录尚未读取成功，请重试后再保存。');
       if (scope.conflict) throw failure('CONFLICT_REQUIRES_REVIEW', '请先解决待同步版本冲突，不会覆盖云端。');
       const clean = validatePayload(payload);
       if (!scope.pending && equal(clean, scope.cloudPayload)) return getStatus();
@@ -1042,8 +1049,9 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
       };
       const durable = preserve(scope);
       if (!scope.conflict) {
-        setStatus('pending', durable ? null : failure('LOCAL_BACKUP_UNAVAILABLE', '当前待同步内容仅在本页面内，请保持页面打开或先导出。'), { revision: scope.revision, pendingDurable: durable });
-        schedule();
+        setStatus(authenticated ? 'pending' : 'auth_expired', durable ? (authenticated ? null : failure('AUTH_EXPIRED', '家庭连接已失效；当前修改已保留在本机，恢复原家庭后才能同步。', 401)) : failure('LOCAL_BACKUP_UNAVAILABLE', '当前待同步内容仅在本页面内，请保持页面打开或先导出。'), { revision: scope.revision, pendingDurable: durable });
+        if (authenticated) schedule();
+        else clearTimer();
       }
       return getStatus();
     }
@@ -1500,6 +1508,7 @@ let parent=null,children=[],cloudLoading=true,cloudError='',cloudStatus={state:'
 let cloud=null,auth=null,authMode=ADMIN_ENTRY?'admin':'signup',authBusy=false,authError='',authMessage='',authEmail='',authPhone='',authChildName='',recovery=false,authGeneration=0,startSequence=0,sessionIdentity=null,configurationError='',authLinkNotice='',callbackNoticeDismissed=false;
 let assessmentScope=null,currentResult=null,resultError='',adminAllowed=false,adminLoading=false,adminRows=[],adminDetail=null,adminError='',adminTotal=0,adminOffset=0,adminQuery={account:'',child:''},adminRequest=0;
 let resumeChecked=false,privateFamilyLink=null,familyLinkRequest=0;
+let profileBusy=false,profileNameDraft='',profileError='';
 const familyResumeNotice='本设备保留有效家庭会话时，选择同一个孩子即可继续已保存的进度。换设备请让家长使用私密续做链接恢复；只有姓名或手机号不能找回记录。';
 const phoneContactNotice='姓名和手机号由家长自行填写。手机号仅作为家长联系信息，不会发送验证码，也不能凭手机号查看或找回孩子的测评记录；这不是实名认证。';
 function familySafetyNotice(){return '<p>私密续做链接约30天内可用于恢复家庭会话，请只由家长保管，不要公开或转给其他人；泄露后，他人可能在有效期内进入本家庭。</p><p>换发只阻止旧链接再次恢复会话，不会退出已经登录的设备。共用设备用完后，请先确认作答已保存并保管续做链接，再点“退出当前家庭”。不要在共用设备留存作答下载文件或私密链接。</p><p>设备丢失或怀疑链接泄露时，请尽快联系管理员人工处理；仍能使用的家庭设备可先换发链接。本页目前不能远端退出其他设备，也不保证丢失设备立即失效。</p>';}
@@ -1538,9 +1547,10 @@ function hasVolatileBackups(owner){
 }
 const uiKey=id=>'ket-cloud-ui-v1:'+id;
 function cloudPayload(){return {...(assessmentScope==='assessment'?{assessment_scope:'assessment'}:{}),response_state:model.getState(),ui:{...ui},listening_raw:cache?.getItem('listening')?JSON.parse(cache.getItem('listening')):null};}
-function queueCloud(){if(hydrating||!profile||!model)return true;currentResult=null;try{if(!cloud)throw new Error('当前账号连接已失效，请先保留作答。');cloud.queue(cloudPayload());cloudQueueError=null;return true;}catch(e){cloudQueueError=e;cloudStatus={...cloudStatus,state:'offline',error:{code:e.code,message:e.message}};saveStatus();toast(e.message||'未同步，请导出本页作答。');return false;}}
+function queueCloud(){if(hydrating||!profile||!model)return true;currentResult=null;try{if(!cloud)throw new Error('当前账号连接已失效，请先保留作答。');cloud.queue(cloudPayload());cloudQueueError=null;return true;}catch(e){cloudQueueError=e;cloudStatus={...cloudStatus,state:e.status===401||['AUTH_REQUIRED','AUTH_EXPIRED'].includes(e.code)?'auth_expired':'offline',error:{code:e.code,message:e.message}};saveStatus();toast(e.message||'未同步，请导出本页作答。');return false;}}
 function memoryCache(payload){const values=new Map();if(payload?.response_state)values.set('response',JSON.stringify(payload.response_state));if(payload?.listening_raw)values.set('listening',JSON.stringify(payload.listening_raw));return {getItem:k=>values.has(k)?values.get(k):null,setItem(k,v){values.set(k,String(v));if(['response','listening'].includes(k))queueCloud();},removeItem:k=>values.delete(k)};}
 function detachAccount(){
+  profileBusy=false;profileNameDraft='';profileError='';
   // Privacy takes precedence when another device/tab changes the authenticated
   // account. Retain unresolved work in an owner-scoped memory backup, never in
   // the next parent's visible model or export cache.
@@ -1555,8 +1565,13 @@ function detachAccount(){
 }
 function authChanged(event,summary){
   const id=summary?.authenticated?summary.user.id:null,changed=id!==sessionIdentity;
+  const unexpectedLoss=event==='SIGNED_OUT'&&Boolean(sessionIdentity||parent)&&!authBusy&&!ADMIN_ENTRY;
   if(changed||event==='SIGNED_OUT'||event==='PASSWORD_RECOVERY'){
-    authGeneration++;detachAccount();sessionIdentity=id;cloudError='';cloudLoading=Boolean(id);recovery=event==='PASSWORD_RECOVERY';if(recovery)authMode='update';render();
+    authGeneration++;detachAccount();sessionIdentity=id;cloudError='';cloudLoading=Boolean(id);recovery=event==='PASSWORD_RECOVERY';
+    if(recovery)authMode='update';
+    else if(unexpectedLoss){authMode='resume';authError='家庭连接已失效，请家长恢复原来的进度，不要重新登记。';authMessage='';}
+    else if(id&&!ADMIN_ENTRY){authMode='signup';authError='';authMessage='';authLinkNotice='';}
+    render();
   }
   if(changed||event==='INITIAL_SESSION'||event==='SIGNED_OUT'||event==='PASSWORD_RECOVERY'){
     const generation=authGeneration;
@@ -1577,6 +1592,7 @@ function authErrorMessage(error){
     REGISTRATION_FAILED:'登记未完成。若此前已登记，请回原设备继续，或在原设备生成家庭私密续做链接；不要重复登记。',
     INVALID_RESUME_LINK:'家庭私密续做链接无效，请在原设备重新生成。',
     RESUME_FAILED:'家庭私密续做链接已失效或无法使用，请在原设备重新生成。',
+    RESUME_LINK_INVALID:'私密续做链接无效、已过期或已被换发。请在仍能进入的原设备生成新链接；若原设备也无法进入，请查看下方恢复帮助。',
     EXISTING_FAMILY_SESSION:'当前设备已有家庭登录。请先保存并退出当前家庭，再重新打开私密续做链接。',
     RESUME_URL_CLEANUP_FAILED:'浏览器无法清理私密链接，请用正常浏览器重新打开，不要公开分享链接。',
     TOO_MANY_ATTEMPTS:'操作过于频繁，请稍候再试；不要连续提交。',
@@ -1588,6 +1604,8 @@ function authErrorMessage(error){
     INVALID_EMAIL:'请填写已有管理员账号邮箱。',
     INVALID_PASSWORD:authMode==='update'?'请设置至少10个字符的管理员密码。':'请填写管理员密码。',
     AUTH_BUSY:'上一项账号操作尚未完成，请稍候再试。',
+    AUTH_EXPIRED:'家庭连接已失效，请家长恢复原来的进度。',
+    AUTH_REQUIRED:'家庭连接已失效，请家长恢复原来的进度。',
     AUTH_SESSION_NOT_OBTAINED:'登录会话尚未取得，请重新登录。',
     STALE_AUTH_SCOPE:'账号状态已变化，请使用当前家长账号重新操作。',
     CLOSED:'账号连接已关闭，请刷新页面后重新登录。'
@@ -1599,7 +1617,7 @@ async function startCloud(){
   const current=()=>seq===startSequence&&generation===authGeneration;
   try{
     if(!auth){cloudLoading=false;render();return;}
-    if(!resumeChecked){resumeChecked=true;try{await auth.resumeFromUrl();}catch(error){authLinkNotice=authErrorMessage(error);if(error.code==='EXISTING_FAMILY_SESSION'&&profile)modal('<h2>保留当前家庭</h2><p>'+esc(authLinkNotice)+'</p><button data-action="close">继续当前家庭</button>');}if(!current())return;}
+    if(!resumeChecked){resumeChecked=true;try{await auth.resumeFromUrl();}catch(error){authLinkNotice=authErrorMessage(error);if(!ADMIN_ENTRY&&!parent&&['RESUME_LINK_INVALID','INVALID_RESUME_LINK','RESUME_FAILED'].includes(error.code))authMode='resume';if(error.code==='EXISTING_FAMILY_SESSION'&&profile)modal('<h2>保留当前家庭</h2><p>'+esc(authLinkNotice)+'</p><button data-action="close">继续当前家庭</button>');}if(!current())return;}
     const callback=await auth.callbackStatus();if(!current())return;
     if(!callbackNoticeDismissed&&callback.status==='LINK_ERROR')authLinkNotice='这条旧管理员邮件链接已失效。已有家庭请在原设备继续，换设备使用家长保管的私密续做链接。';
     else if(!callbackNoticeDismissed&&callback.status==='INITIALIZATION_ERROR')authLinkNotice='账号验证暂未完成。请检查网络后刷新，或稍后重新登录；不要连续点击验证链接。';
@@ -1625,7 +1643,7 @@ function authPage(){
   const identityInput=updating?'':admin?`<label for="authEmail">管理员邮箱<input class="field" id="authEmail" type="email" autocomplete="username" maxlength="254" value="${esc(authEmail)}" required ${disabled?'disabled':''}></label>`:`<label for="authChildName">孩子姓名<input class="field" id="authChildName" autocomplete="off" maxlength="30" value="${esc(authChildName)}" required ${disabled?'disabled':''}></label><label for="authPhone">家长手机号<input class="field" id="authPhone" type="tel" inputmode="tel" autocomplete="tel" maxlength="40" value="${esc(authPhone)}" required ${disabled?'disabled':''}></label>`;
   const passwordInput=admin||updating?`<label for="authPassword">${updating?'新密码（至少10个字符）':'管理员密码'}<input class="field" id="authPassword" type="password" autocomplete="${updating?'new-password':'current-password'}" ${updating?'minlength="10"':''} maxlength="128" required ${disabled?'disabled':''}></label>${updating?`<label for="authPasswordConfirm">再次输入密码<input class="field" id="authPasswordConfirm" type="password" autocomplete="new-password" minlength="10" maxlength="128" required ${disabled?'disabled':''}></label>`:''}`:'';
   if(ADMIN_ENTRY){shell(`<div class="hero"><p class="eyebrow">ADMIN ACCESS</p><h1>测评管理后台</h1><p>仅管理员使用，孩子请进入测评页面。</p></div><section class="card auth-card"><h2>${title}</h2>${configurationError?'<p class="warning">'+esc(configurationError)+'</p>':''}${authError?'<p class="warning" role="alert">'+esc(authError)+'</p>':''}${cloudError?'<p class="warning">'+esc(cloudError)+'</p>':''}<form id="authForm">${identityInput}${passwordInput}<button class="primary" id="authSubmit" type="submit" ${disabled?'disabled':''}>${authBusy?'正在处理…':updating?'保存新密码':'管理员登录'}</button></form><p><a href="${esc(CONFIG.siteUrl)}">返回孩子测评入口</a></p></section>`,false);updateAuthControls();return;}
-  shell(`<div class="hero"><p class="eyebrow">READY TO EXPLORE?</p><h1>开始英语测评</h1></div><section class="card auth-card">${title?`<h2>${title}</h2>`:''}${authLinkNotice?`<p class="note" role="alert">${esc(authLinkNotice)}</p>`:''}${configurationError?`<p class="warning">${esc(configurationError)}</p>`:''}${authMessage?`<p class="quiet" role="status">${esc(authMessage)}</p>`:''}${authError?`<p class="warning" role="alert">${esc(authError)}</p>`:''}${cloudError?`<p class="warning">${esc(cloudError)}</p>`:''}${resuming?`<div class="note"><p>请在仍有有效家庭会话的原设备打开本页，在孩子列表展开“家庭设置（家长）”，点击“生成家庭私密续做链接”，再由家长在自己的另一台设备打开。</p><p>${esc(familyResumeNotice)}</p><p>请勿重复登记同一家庭；若原设备和私密链接都丢失，请联系管理员人工处理，不保证可以仅凭自报信息恢复记录。</p>${familySafetyNotice()}</div><button data-action="authSignup" ${disabled?'disabled':''}>返回填写</button>`:`<form id="authForm">${identityInput}${passwordInput}<button class="primary" id="authSubmit" type="submit" ${disabled?'disabled':''}>${authBusy?'正在处理…':updating?'保存新密码':signup?'开始测评 →':'管理员登录 →'}</button></form>`}${updating?'<p class="quiet">请由管理员本人设置密码，不要发送密码给他人。</p>':!resuming&&(authError||authLinkNotice)?`<p><button data-action="authResume" ${disabled?'disabled':''}>需要恢复进度？</button></p>`:''}</section>`,false);
+  shell(`<div class="hero"><p class="eyebrow">READY TO EXPLORE?</p><h1>开始英语测评</h1></div><section class="card auth-card">${title?`<h2>${title}</h2>`:''}${authLinkNotice?`<p class="note" role="alert">${esc(authLinkNotice)}</p>`:''}${configurationError?`<p class="warning">${esc(configurationError)}</p>`:''}${authMessage?`<p class="quiet" role="status">${esc(authMessage)}</p>`:''}${authError?`<p class="warning" role="alert">${esc(authError)}</p>`:''}${cloudError?`<p class="warning">${esc(cloudError)}</p>`:''}${resuming?`<div class="note"><p>请在仍有有效家庭会话的原设备打开本页，在孩子列表展开“家庭设置（家长）”，点击“生成家庭私密续做链接”，再由家长在自己的另一台设备打开。</p><p>${esc(familyResumeNotice)}</p><details><summary>找不到原设备或私密链接？</summary><p>链接丢失或过期，但另一台设备仍能进入：请在那台设备的家庭设置中生成新链接，再在本设备打开。</p><p>所有设备都无法进入，私密链接也不可用：请联系提供本次测评的老师或管理员，核验身份和原记录归属后人工处理。本页不会只凭姓名或手机号恢复，也不保证可以找回；请勿为同一次测评重复新建家庭。</p><p>当前浏览器仍保留的未同步输入不会移入新家庭。请保持本页打开，恢复同一家庭后再核对。</p></details>${familySafetyNotice()}</div><button data-action="authSignup" ${disabled?'disabled':''}>返回填写</button>`:`<form id="authForm">${identityInput}${passwordInput}<button class="primary" id="authSubmit" type="submit" ${disabled?'disabled':''}>${authBusy?'正在处理…':updating?'保存新密码':signup?'开始测评 →':'管理员登录 →'}</button></form>`}${updating?'<p class="quiet">请由管理员本人设置密码，不要发送密码给他人。</p>':!resuming&&(authError||authLinkNotice||authMessage)?`<p><button data-action="authResume" ${disabled?'disabled':''}>需要恢复进度？</button></p>`:''}</section>`,false);
   updateAuthControls();
 }
 async function submitAuth(){
@@ -1650,7 +1668,7 @@ function saveStatus(){const e=$('#status');if(!e)return;
   if(ADMIN_ENTRY){e.className=cloudError?'warning':'';e.textContent=cloudLoading?'正在连接后台…':parent?(adminAllowed?'管理员已登录':'当前账号没有后台权限'):'请登录管理员账号';return;}
   if(!parent){e.className=configurationError?'warning':'';e.textContent=configurationError?'暂时无法连接，请稍后再试。':authBusy?'正在登记…':cloudLoading?'正在载入…':'填写信息，开始测评';return;}
   const state=cloudStatus.state,messages={idle:'请选择自己的名字',loading:'正在读取进度…',pending:'正在保存，请稍候…',saved:'已保存',offline:'暂未保存成功，请重试，先不要关闭页面。',conflict:'另一台设备有新进度，请让家长处理。',auth_expired:'请家长恢复家庭入口，当前输入已保留。',closed:'请选择自己的名字'};
-  e.className=['offline','conflict','auth_expired'].includes(state)?'warning':'';e.textContent=state==='saved'&&cloudStatus.revision===0?'已连接':messages[state]||'正在连接…';
+  e.className=['offline','conflict','auth_expired'].includes(state)?'warning':'';e.textContent=state==='saved'&&cloudStatus.revision===0?'已连接':messages[state]||'正在连接…';if(state==='auth_expired')e.innerHTML=esc(messages[state])+' <button data-action="resumeHelp">恢复进度</button>';
 }
 function save(){if(model)model.save();saveStatus();}
 function releaseURL(){const listeningPlayer=$('#listenPlayer');if(listeningPlayer&&typeof listeningPlayer.pause==='function'&&!listeningPlayer.paused)listeningPlayer.pause();if(audioURL){URL.revokeObjectURL(audioURL);audioURL=null;}}
@@ -1658,8 +1676,16 @@ function blockedNav(){if(recording||pendingMic||stopping){toast('请先停止并
 function source(g){return `<details class="source"><summary>题目来源 · Test ${g.test} / ${g.component} Part ${g.part} · ${g.ref}</summary><p>${esc(g.source.filename)}<br>PDF第${g.source.pdf_pages.join('、')}页 · 印刷页${g.source.printed_pages.join('、')}<br>按Owner提供原页转为网页；来源名称保留，不代表本页是剑桥官方考试。</p></details>`;}
 function sourceLine(g){return `<p class="quiet" style="font-size:13px;margin-top:0">题源资料：<b>${esc(g.source.filename)}</b><br>Test ${g.test} · ${g.component} Part ${g.part} · PDF第${g.source.pdf_pages.join('、')}页 / 印刷页${g.source.printed_pages.join('、')}</p>`;}
 function parentContact(who=parent){return who?.contact_phone||who?.phone||who?.email||'已登录家庭';}
+// This comparison only guards confusing display names. It never merges child
+// identities, answers or records, which remain scoped by their server UUIDs.
+function childNameKey(name){return String(name||'').normalize('NFKC').trim().replace(/\s+/gu,' ').toLocaleLowerCase('en-US');}
+function orderedChildren(){return [...children].sort((a,b)=>String(a.created_at||'').localeCompare(String(b.created_at||''))||a.id.localeCompare(b.id));}
+function childDisplayName(child){
+  const ordered=orderedChildren(),similar=ordered.filter(p=>childNameKey(p.name)===childNameKey(child.name));
+  return child.name+(similar.length>1?' · 家庭成员'+(ordered.findIndex(p=>p.id===child.id)+1):'');
+}
 function shell(content,nav=true){
-  $('#identity').innerHTML=parent?(ADMIN_ENTRY?'<button data-action="logoutPrepare">退出后台</button>':profile?`<span><b>${esc(profile.name)}</b></span><button data-action="profiles">切换姓名</button><button data-action="report">我的记录</button>`:''):'';
+  $('#identity').innerHTML=parent?(ADMIN_ENTRY?'<button data-action="logoutPrepare">退出后台</button>':profile?`<span><b>${esc(childDisplayName(profile))}</b></span><button data-action="profiles">切换姓名</button><button data-action="report">我的记录</button>`:''):'';
   $('#app').innerHTML=`<main class="wrap ${['profiles','intro','tutorial'].includes(view)?'narrow':''}">${profile&&nav&&!ADMIN_ENTRY?tabs():''}${content}<p class="footer-note">KET 英语测评</p></main>`;saveStatus();
 }
 function tabs(){return `<nav class="tabs" aria-label="四个测评板块">${[['Listening','听力'],['Speaking','口语'],['Reading','阅读'],['Writing','写作']].map(([m,cn])=>`<button data-action="module" data-value="${m}" class="${view==='task'&&module===m?'active':''}" ${view==='task'&&module===m?'aria-current="page"':''}>${m}<small>${cn}</small></button>`).join('')}</nav>`;}
@@ -1667,19 +1693,28 @@ function currentState(g){return model.getState().groups[g.ref]||null;}
 function countAnswered(g,d){if(!d)return 0;if(g.component==='Writing')return d.writing_mode==='paper'?0:(d.writing_text.trim()?1:0);return g.question_numbers.filter(n=>!!d.answers[String(n)]?.trim()).length;}
 function statusText(g){const d=currentState(g);return !d?'未开始':d.submitted?'已提交':`${countAnswered(g,d)}/${g.question_numbers.length} 已作答`;}
 async function openProfiles(){
-  if(blockedNav()||!parent||!cloud||!queueCloud())return;
+  if(profileBusy||blockedNav()||!parent||!cloud||!queueCloud())return;
   const owner=parent.id,instance=cloud,generation=authGeneration;
   try{if(profile&&model)await instance.flush();}catch(_){if(generation!==authGeneration||cloud!==instance)return;if(instance.getStatus().pendingDurable!==true){toast('尚未同步，且无法在本机持久备份。请先导出当前作答；本页不会清空或切换。');return;}toast('未同步的作答已保留为当前账号、孩子专属待同步记录。');}
   if(generation!==authGeneration||parent?.id!==owner||cloud!==instance)return;
-  enterEpoch++;releaseURL();profile=null;model=null;cache=null;voiceRecords=[];exportCache=null;capture=null;listeningSession=null;ui={};view='profiles';currentResult=null;resultError='';assessmentScope=null;adminRequest++;adminLoading=false;adminRows=[];adminDetail=null;adminError='';adminTotal=0;
+  enterEpoch++;releaseURL();profile=null;model=null;cache=null;voiceRecords=[];exportCache=null;capture=null;listeningSession=null;ui={};view='profiles';profileError='';currentResult=null;resultError='';assessmentScope=null;adminRequest++;adminLoading=false;adminRows=[];adminDetail=null;adminError='';adminTotal=0;
   try{const list=await instance.children();if(generation!==authGeneration||parent?.id!==owner||cloud!==instance)return;children=list;}catch(e){if(generation!==authGeneration)return;cloudError=e.message;}
   render();
 }
 async function enter(id,name){
-  if(blockedNav()||!parent||!cloud||profile)return;
+  if(profileBusy||blockedNav()||!parent||!cloud||profile)return;
   const epoch=++enterEpoch,owner=parent.id,instance=cloud;
   const current=()=>epoch===enterEpoch&&parent?.id===owner&&cloud===instance;
-  if(name){const added=await instance.addChild(name);if(!current())return;const list=await instance.children();if(!current())return;children=list;id=added.id;}
+  let addedChild=false;
+  if(name!==undefined){
+    profileNameDraft=String(name||'');
+    const clean=profileNameDraft.normalize('NFC').trim();
+    if(!clean||[...clean].length>30||/[\u0000-\u001f\u007f]/.test(clean)){profileError='请填写1—30个字符的姓名或昵称。';render();return;}
+    if(children.some(p=>childNameKey(p.name)===childNameKey(clean))){profileError='列表已有相同或相似的名字，请选择已有名字；如果是另一个孩子，请填写容易区分的昵称。';render();return;}
+  }
+  profileBusy=true;profileError='';render();
+  try{
+  if(name!==undefined){const added=await instance.addChild(profileNameDraft);if(!current())return;children=[...children.filter(p=>p.id!==added.id),added];id=added.id;profileNameDraft='';addedChild=true;}
   const next=children.find(p=>p.id===id);if(!next)throw new Error('请先选择当前家长账号下的孩子。');
   const opened=await instance.open(id);if(!current())return;
   if(opened.pendingConflict){modal('<h2>发现未同步的本机作答</h2><p>云端已有其他设备的更新。两份都已保留，当前不会合并或覆盖。</p><div class="row"><button data-action="exportPending">导出未同步备份</button><button data-action="reloadCloud">保留备份并载入云端</button><button data-action="close">返回</button></div>');return;}
@@ -1688,6 +1723,10 @@ async function enter(id,name){
   try{const nextCache=memoryCache(opened.payload),nextModel=KetResponse.create({groups:modelGroups,storage:nextCache,key:'response'});cache=nextCache;profile=next;model=nextModel;assessmentScope=!opened.payload||opened.payload.assessment_scope==='assessment'?'assessment':null;currentResult=null;resultError='';ui=opened.payload?.ui||{};voiceRecords=records;const listen=(DATA.listening||[])[0];listeningSession=listen?KetListening.create({storage:cache,key:'listening',profileId:profile.id,taskRef:listen.ref,audio:listen.audio}):null;}
   finally{hydrating=false;}
   view=!ui.introDone?'intro':!ui.tutorialDone?'tutorial':'home';render();
+  }catch(error){
+    if(!current())return;
+    profileError=addedChild?'名字已经添加，但进度暂未载入。请点列表中的名字重试，不用再次添加。':error.code==='CHILD_NAME_EXISTS'?'这个名字已经添加，请重试连接刷新列表后选择；另一个孩子请使用不同昵称。':error.code==='CHILD_LIMIT_REACHED'?'当前家庭的孩子数量已达上限，请联系管理员处理。':error.code==='INVALID_CHILD_NAME'?'请填写1—30个字符的姓名或昵称。':'暂时没能完成操作，填写的名字已保留。请检查连接后重试。';
+  }finally{if(current()){profileBusy=false;render();}}
 }
 function profilesPage(){
   if(recovery){authPage();return;}
@@ -1696,7 +1735,7 @@ function profilesPage(){
     if(sessionIdentity&&auth){shell(`<section class="card"><h1>暂时没能载入</h1><p class="warning">${esc(cloudError||'请重试连接。')}</p><div class="row"><button class="primary" data-action="retryCloud">重试</button><button data-action="logoutPrepare">退出</button></div></section>`,false);return;}
     authPage();return;
   }
-  shell(`<div class="hero"><p class="eyebrow">READY TO EXPLORE?</p><h1>选择你的名字</h1><p class="muted">点自己的名字，接着上次的进度。</p></div><section class="card"><div class="profiles">${children.map(p=>`<button class="profile" data-action="enter" data-value="${esc(p.id)}">${esc(p.name)}<small>开始／继续 →</small></button>`).join('')||'<p class="muted">先添加你的名字。</p>'}</div><form id="profileForm"><label for="profileName">添加姓名</label><div class="row"><input id="profileName" class="field" maxlength="30" autocomplete="off" placeholder="你的名字或昵称" required style="flex:1;min-width:180px"><button class="primary" type="submit">添加并开始 →</button></div></form>${cloudError?'<p class="warning">'+esc(cloudError)+'</p><button data-action="retryCloud">重试连接</button>':''}</section><details class="card"><summary>家庭设置（家长）</summary>${authLinkNotice?'<p class="note">'+esc(authLinkNotice)+'</p>':''}<p>一个手机号可添加多个孩子，每个孩子单独保存。</p><p>${esc(phoneContactNotice)}</p><p>${esc(familyResumeNotice)}</p>${familySafetyNotice()}<div class="row">${parent.contact_phone?'<button data-action="familyLink">生成家庭私密续做链接</button>':''}<button data-action="logoutPrepare">退出当前家庭</button></div>${[...retainedBackups.values()].some(value=>value.parent_id===parent.id)?'<p class="note">有上次未同步的作答备份，请先保留。</p><button data-action="exportRetained">导出此账号备份</button>':''}</details>`,false);
+  shell(`<div class="hero"><p class="eyebrow">READY TO EXPLORE?</p><h1>选择你的名字</h1><p class="muted">点自己的名字，接着上次的进度。</p></div><section class="card"><div class="profiles">${orderedChildren().map(p=>`<button class="profile" data-action="enter" data-value="${esc(p.id)}" aria-label="${esc(childDisplayName(p))}，开始或继续" ${profileBusy?'disabled':''}>${esc(childDisplayName(p))}<small>开始／继续 →</small></button>`).join('')||'<p class="muted">先添加你的名字。</p>'}</div><form id="profileForm"><label for="profileName">添加姓名</label><div class="row"><input id="profileName" class="field" maxlength="30" autocomplete="off" placeholder="你的名字或昵称" value="${esc(profileNameDraft)}" required style="flex:1;min-width:180px" ${profileBusy?'disabled':''}><button class="primary" type="submit" ${profileBusy?'disabled':''}>${profileBusy?'正在打开…':'添加并开始 →'}</button></div>${profileError?'<p class="warning" role="alert">'+esc(profileError)+'</p>':''}</form>${cloudError?'<p class="warning">'+esc(cloudError)+'</p><button data-action="retryCloud">重试连接</button>':''}</section><details class="card"><summary>家庭设置（家长）</summary>${authLinkNotice?'<p class="note">'+esc(authLinkNotice)+'</p>':''}<p>一个手机号可添加多个孩子，每个孩子单独保存。</p><p>${esc(phoneContactNotice)}</p><p>${esc(familyResumeNotice)}</p>${familySafetyNotice()}<div class="row">${parent.contact_phone?'<button data-action="familyLink">生成家庭私密续做链接</button>':''}<button data-action="logoutPrepare">退出当前家庭</button></div>${[...retainedBackups.values()].some(value=>value.parent_id===parent.id)?'<p class="note">有上次未同步的作答备份，请先保留。</p><button data-action="exportRetained">导出此账号备份</button>':''}</details>`,false);
 }
 function intro(){shell(`<div class="hero"><p class="eyebrow">BEFORE YOU BEGIN</p><h1>${esc(profile.name)}，先认识这次测评。</h1><p>你可以自由选择板块，一次只完成一组也可以。</p></div><section class="card"><h2>四种技能，按需测评</h2><div class="table-scroll"><table><thead><tr><th>官方A2 Key考试组件</th><th>官方安排</th><th>本页怎么做</th></tr></thead><tbody><tr><td>Reading & Writing</td><td>60分钟 · 7 Parts · 32题<br>总成绩占比50%</td><td>分成阅读、写作两个入口。7组阅读共44题；2项写作可单独做。</td></tr><tr><td>Listening</td><td>约30分钟 · 5 Parts · 25题<br>占比25%</td><td>第2套Part 2 · 5题配套录音与填空。</td></tr><tr><td>Speaking</td><td>通常两人8—10分钟 · 2 Parts<br>占比25%</td><td>看题口头回答，暂不要求录音反馈；不替代双人互动考试。</td></tr></tbody></table></div><p class="source">官方考试是三个组件，本页用四个技能入口。当前测评组合并非一套完整正式卷，不按44题换算官方成绩。官方安排：<a href="https://www.cambridgeenglish.org/exams-and-tests/qualifications/key/format/" target="_blank" rel="noopener noreferrer">Cambridge A2 Key考试说明</a>。</p></section><section class="card"><h2>你需要知道</h2><ul><li>阅读：一次看一道题，共享文章始终可以查看；整组提交前可以返回修改。</li><li>写作：邮件至少25词，三图故事至少35词。可打字，也可写在纸上后由家长把照片交给GPT。</li><li>听力：点击播放原录音，在共享表格里填写答案；本页保留整组材料。口语可以直接口头回答，录音留存可选，本轮不要求录音反馈。</li><li>未提交内容会尝试自动保存。提交会锁定本轮首次答案；答题卡不显示对错。</li><li>页面不自动评英语等级。已交客观题按本地源键核对；开放答案争议、写作和口语待评，不是官方KET成绩。写作审核参考Content、Organisation、Language维度。</li></ul><div class="note">请如实记录是否见过题目、是否有人帮助。计时从首次填写/点选到提交，不含之前阅读时间；它是时钟跨度，包含暂停和切换后台，不能当作专注用时。</div><button class="primary" data-action="introDone">看操作示例 →</button></section>`,false);}
 function tutorial(){shell(`<div class="hero"><p class="eyebrow">TRY THE CONTROLS</p><h1>先试一试，不计入作答。</h1></div><section class="card"><h3><span class="step">1</span>点选答案</h3><p>下面只练操作：请点一下B。</p><div class="choices" id="demoChoices">${['A','B','C'].map(x=>`<button class="choice" data-action="demoChoice"><span class="letter">${x}</span><span>操作示例 ${x}</span></button>`).join('')}</div><h3><span class="step">2</span>输入文字</h3><label>试着输入一个英文词<input class="field" id="demoWord" placeholder="输入后可以修改" autocomplete="off"></label><p class="muted" id="demoMessage">这些内容不会进入测评记录。</p></section><section class="card"><h3><span class="step">3</span>认识答题卡</h3><div class="numbers"><button disabled>7</button><button class="done" disabled>8</button><button class="locked" disabled>9</button></div><p class="muted">白色：未作答 · 浅绿：已作答 · 锁定色：已提交<br>正式答题时可以点题号返回。整组提交前会再次确认空题。</p><h3><span class="step">4</span>听力和提交</h3><p>听力按“播放原录音 → 填写5个空 → 检查并提交”。口语先看题口头回答，不要求录音反馈。最后到“保存与导出”复制文字或下载JSON，交给家长/GPT分析。</p><button class="primary" data-action="tutorialDone">明白了，选择板块 →</button></section>`,false);}
@@ -1833,6 +1872,16 @@ async function copyFamilyLink(){
 }
 const actions={
 familyLink:createFamilyLink,copyFamilyLink,
+resumeHelp(){
+  if(ADMIN_ENTRY||!parent||cloudStatus.state!=='auth_expired')return;
+  modal('<h2>请家长恢复测评进度</h2><p>家庭连接已失效，当前输入仍留在本页，尚未确认保存到云端。请先保留作答，再恢复原家庭。</p><div class="row"><button class="primary" data-action="retryFamilySession">重新连接</button><button data-action="exportPending">导出当前作答</button><button data-action="logoutPrepare">保留作答并退出</button><button data-action="close">留在本页</button></div><p>若需要重新进入，请使用家长保管的私密续做链接。链接失效或丢失但另一设备仍能进入时，在那台设备的家庭设置中生成新链接；所有设备和链接都不可用时，请联系提供本次测评的老师或管理员人工核验。不能只凭手机号或姓名恢复。</p>');
+},
+async retryFamilySession(){
+  if(ADMIN_ENTRY||!parent||cloudStatus.state!=='auth_expired')return;
+  const owner=parent.id,instance=cloud;closeModal();await startCloud();
+  if(parent?.id!==owner||cloud!==instance||cloudError)return;
+  if(profile&&queueCloud()){try{await instance.flush();}catch(_){/* Keep the scoped pending work and its actual failure state. */}}
+},
 async admin(){if(!ADMIN_ENTRY||blockedNav()||!parent||!adminAllowed)return;const owner=parent.id;await openProfiles();if(parent?.id!==owner||profile||!adminAllowed)return;view='admin';render();await queryAdmin(0);},
 adminPrev(){return queryAdmin(Math.max(0,adminOffset-50));},adminNext(){return queryAdmin(adminOffset+50);},adminDetail:b=>loadAdminDetail(b.dataset.value),adminListCsv(){adminExport('list');},adminDetailJson(){adminExport('json');},adminDetailCsv(){adminExport('csv');},
 async retryCloud(){cloudLoading=true;cloudError='';render();await startCloud();},
@@ -1884,7 +1933,7 @@ document.addEventListener('click',guarded(async e=>{const b=e.target.closest('[d
 document.addEventListener('submit',guarded(async e=>{if(e.target.id==='authForm'){e.preventDefault();await submitAuth();return;}if(e.target.id==='adminQueryForm'){e.preventDefault();if(!ADMIN_ENTRY||!parent||!adminAllowed||adminLoading)return;adminQuery={account:($('#adminAccount')?.value||'').trim(),child:($('#adminChild')?.value||'').trim()};await queryAdmin(0);return;}if(e.target.id!=='profileForm')return;e.preventDefault();await enter(null,$('#profileName').value);}));
 document.addEventListener('input',guarded(e=>{const t=e.target;if(['authEmail','authPhone','authChildName'].includes(t.id)){updateAuthControls();return;}if(!model)return;if(t.dataset.listeningAnswer){if(!listeningCanSubmit()||model.draft(ref).submitted)return;model.start(ref);model.setAnswer(ref,Number(t.dataset.listeningAnswer),t.value);saveStatus();}if(t.id==='wordAnswer'){model.start(ref);model.setAnswer(ref,find(ref).questions[qi].number,t.value);saveStatus();}if(t.id==='writingText'){model.start(ref);model.setWritingText(ref,t.value);$('#wordCount').textContent=words(t.value)+' words · 原题要求至少'+find(ref).minimum_words+'词';saveStatus();}if(t.id==='contextNotes'){model.setContext(ref,{notes:t.value});saveStatus();}}));
 document.addEventListener('change',guarded(async e=>{const t=e.target;if(t.id==='groupSelect'){ref=t.value;qi=Number(ui['q_'+ref])||0;render();}if(t.id==='speakSelect'){if(blockedNav()){t.value=ref;return;}ref=t.value;qi=0;render();}if(t.dataset.context){model.setContext(ref,{[t.dataset.context]:t.value});saveStatus();}if(t.id==='paperReady'){model.start(ref);model.setPaperReady(ref,t.checked);saveStatus();}if(t.id==='audioFile'&&t.files[0]){const f=t.files[0];if(!/^audio\//.test(f.type)&&! /\.(m4a|mp3|wav|webm|ogg|mp4)$/i.test(f.name)){toast('请选择实际音频文件。');t.value='';return;}if(f.size>100*1024*1024){toast('音频大于100MB，请先缩短录音；当前文件未保存。');return;}const p=profile.id,task=ref,question=voiceQuestion();const r=await voice.saveDraft({profileId:p,taskRef:task,questionRef:question,blob:f,mimeType:f.type,fileName:f.name,durationSeconds:null});if(profile?.id===p&&ref===task&&voiceQuestion()===question){await refreshVoice();render();toast(r.message);}}}));
-window.addEventListener('beforeunload',e=>{if(recording||pendingMic||stopping||hasVolatileBackups()||['pending','offline','conflict'].includes(cloudStatus.state)){e.preventDefault();e.returnValue='仍有未同步内容或仅在本页的备份，请先保存或导出。';}});
+window.addEventListener('beforeunload',e=>{if(recording||pendingMic||stopping||hasVolatileBackups()||cloudQueueError||['pending','offline','conflict'].includes(cloudStatus.state)||(cloudStatus.state==='auth_expired'&&cloud?.exportPending()?.pending)){e.preventDefault();e.returnValue='仍有未同步内容或仅在本页的备份，请先保存或导出。';}});
 window.addEventListener('pageshow',()=>{if(!parent&&!profile)updateAuthControls();});
 window.addEventListener('hashchange',()=>{resumeChecked=false;startCloud();});
 window.addEventListener('pagehide',()=>{if(model)model.save();if(recorder.isRecording())recorder.cancel();clearInterval(timer);releaseURL();});
