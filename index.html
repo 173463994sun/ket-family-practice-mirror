@@ -821,6 +821,8 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
 
   const PENDING_PREFIX = 'ket-cloud-pending-v1:';
   const DEBOUNCE_MS = 350;
+  // Match the one-MiB API transport ceiling, reserving its PUT envelope.
+  const MAX_PAYLOAD_BYTES = 1024 * 1024 - 2000;
   const clone = value => value == null ? value : JSON.parse(JSON.stringify(value));
   function canonical(value) {
     if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
@@ -851,7 +853,7 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
     if(value.writing_photos && root.KetWritingPhoto)root.KetWritingPhoto.validateCollection(value.writing_photos);
     const text = JSON.stringify(value);
     const bytes=typeof root.TextEncoder==='function'?new root.TextEncoder().encode(text).byteLength:typeof root.Blob==='function'?new root.Blob([text]).size:text.length*3;
-    if (bytes > 300*1024-2000) throw failure('PAYLOAD_TOO_LARGE', '作答记录过大，请先导出备份。');
+    if (bytes > MAX_PAYLOAD_BYTES) throw failure('PAYLOAD_TOO_LARGE', '作答记录过大，请先导出备份。');
     return JSON.parse(text);
   }
 
