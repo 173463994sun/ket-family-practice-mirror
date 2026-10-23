@@ -23,15 +23,20 @@ new inputs can be backed up only within the previously loaded family/child scope
 network reads and saves still require authentication. Confirmed local backups
 allow a safe sign-out followed by private-link resume without losing the latest draft.
 
-The main paper now follows Test 2 in original Part order: Reading Parts 1-5
-(30 questions), then the separate Writing entry retains Parts 6-7 with original
-images. The seven reading groups / 44 questions remain in the source model;
-older Test 1 and Test 4 responses keep their original refs and source identity.
-An existing Test 2 Listening Part 2 source recording is retained in assets and
-prior response metadata. The current ordered listening entry is preparation-only:
-Parts 1, 3, 4 and 5 recordings and their dedicated renderers are not yet complete;
-it neither starts at Part 2 nor permits a new listening submission. Real speaking
-prompts/pictures are preserved. The speaking recorder is visible with an environment reminder,
+Reading and Writing now contain four complete source papers: each has Reading
+Parts 1-5 / 30 questions and Writing Parts 6-7 / two tasks, for 120 objective
+questions and eight writing tasks. Children select a paper, and each paper keeps
+its own source order and saved progress. Shared passages and required original
+pictures remain available. Existing R1-R7, W1/W2 and their historical answers
+retain their source bindings. New source keys stay only on the private backend.
+The compatible catalog is appended without resetting the old record version;
+an outdated cached page cannot erase a newer paper's responses.
+
+Listening retains the five-Part incomplete-paper state: only the previously
+authorized Test 2 Part 2 / five-question recording is available. Parts 1, 3, 4,
+and 5 remain waiting for matched recordings; the complete listening paper cannot
+be newly submitted. No new audio is published. Real speaking prompts and
+pictures remain. The speaking recorder is visible with an environment reminder,
 and supports stop, replay, local first-submission lock and audio export.
 Recording remains device-local; automatic transcription is not connected.
 Writing accepts camera/album photos, normalizes them to bounded JPEGs without
@@ -82,18 +87,11 @@ this is not publisher licence certification or an official Cambridge service.
 No server key, reference key registry, private child data or technical fixture
 is published in this repository.
 
-2026-10-23: main reading and writing use verified Test 2 Part order, preserving
-stable question refs, source wording, answer rules, private cloud data and mail delivery.
-Incomplete listening is held from Part 1 instead of presenting Part 2 as the start.
-Earlier read-only mail recovery remains unchanged; no automatic resend is added.
+2026-10-23: four separate original-order Reading/Writing papers added while
+preserving private save, pending writing review, single-event result emails,
+read-only manual mail recovery and the child Contact Teacher receipt.
+Q13's than/that distinction remains disclosed as a web editorial correction,
+not a publisher erratum. No old source key or submitted response is rewritten.
 Local checks, browser fixtures and owner-authorized disposable cloud
 isolation/resume checks completed. Actual physical iPad Safari acceptance is
 recorded separately; viewport checks do not claim a physical device test.
-
-2026-10-23 source display correction: Test 2 Reading Part 2 Q13 retains the
-existing display word "that" and explicitly distinguishes it from scanned "than"
-in its question-specific source disclosure. This is a declared editorial
-normalization, not a publisher-verified official erratum. Original page evidence
-is retained locally; no source PDF or new page image is published by this update.
-The Part 1 Q1 sender header and body now have an explicit line break. Source
-question data, answer rules, stable response refs and incomplete listening are unchanged.
