@@ -57,8 +57,11 @@ area. No booking destination is configured. Family APIs, including the old /resu
 URL, return only allowlisted save/submission receipt fields. Administrator-only
 queries retain scoring, raw responses and contact details. Family text/JSON exports
 are raw-response backups without grades or analysis. Saving errors do not display
-success. Result email delivery is NOT connected; mail-provider onboarding remains
-an external prerequisite and no email-sent claim appears in the child interface.
+success. QQ SMTP delivery runs only on the private backend, once per newly
+submitted group. SMTP/provider acceptance does not prove inbox receipt. Unknown
+outcomes are not automatically retried; pending events have no independent worker.
+The authorized operator has a one-time no-child-data technical test and a separate
+read-only status view. No email-sent claim appears in the child interface.
 RW2 keeps its authentic repeated three-person options with independent per-item selection.
 Initial registration fields render before the cloud probe completes; startup and
 HTTP waits are bounded with retry. Existing family records are not rebound to a
@@ -69,6 +72,7 @@ this is not publisher licence certification or an official Cambridge service.
 No server key, reference key registry, private child data or technical fixture
 is published in this repository.
 
-2026-10-22: local checks, browser fixtures and owner-authorized disposable cloud
+2026-10-23: private QQ mail controls added without changing the child workflow.
+Local checks, browser fixtures and owner-authorized disposable cloud
 isolation/resume checks completed. Actual physical iPad Safari acceptance is
 recorded separately; viewport checks do not claim a physical device test.
