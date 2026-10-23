@@ -23,17 +23,26 @@ new inputs can be backed up only within the previously loaded family/child scope
 network reads and saves still require authentication. Confirmed local backups
 allow a safe sign-out followed by private-link resume without losing the latest draft.
 
-Reading and Writing now contain four complete source papers: each has Reading
-Parts 1-5 / 30 questions and Writing Parts 6-7 / two tasks, for 120 objective
-questions and eight writing tasks. Children select a paper, and each paper keeps
-its own source order and saved progress. Shared passages and required original
-pictures remain available. Existing R1-R7, W1/W2 and their historical answers
-retain their source bindings. New source keys stay only on the private backend.
-The compatible catalog is appended without resetting the old record version;
-an outdated cached page cannot erase a newer paper's responses.
+Reading and Writing use skill-specific banks: 20 complete reading groups / 120
+objective questions and eight writing tasks. Children choose a skill, never a
+paper or new task group. The app resumes the current incomplete group; otherwise
+it balances task-type coverage, varies source papers and uses a child-specific
+shuffled rank within eligible source groups. Submitted refs, including compatible
+archives, are excluded. The bank stops when no unused eligible group remains.
+The source Test/Part, original options, source keys and shared material stay
+bound to each unchanged ref. Handwriting and typing are two answer methods for
+the same writing task, not extra questions. New keys remain private server-side.
+Assignments read the latest cloud revision and must save with CAS before their
+question faces are displayed. Failed reads can be retried; conflicts preserve
+unconfirmed work and require explicit recovery. History cannot bypass allocation.
+This is a content-coverage routing rule, not calibrated ability/difficulty routing
+or a guarantee of no outside exposure or full semantic duplicate detection.
+Existing R1-R7, W1/W2 and all historical first responses retain their bindings;
+the content version and compatible catalog remain unchanged.
 
-Listening shows Test 2 Parts 1-5 in original order. Part 1 opens first for new
-attempts with its five source questions and 15 original option images. Parts 1,
+Listening allocates the only currently paired group, Test 2 Part 2 / L1,
+and excludes it after its first submission. Test 2 Parts 1-5 remain available
+as source-paper previews, including 15 original Part 1 option images. Parts 1,
 3, 4 and 5 are paper-only previews: no audio, answers or submission are enabled.
 Only the existing paired Part 2 / L1 / Q6-10 recording is available for a clearly
 labelled single-Part activity; its five responses, source keys and historical
@@ -42,6 +51,7 @@ full-paper Listening score is claimed. No new audio is published. Real speaking 
 pictures remain. The speaking recorder is visible with an environment reminder,
 and supports stop, replay, local first-submission lock and audio export.
 Recording remains device-local; automatic transcription is not connected.
+Speaking does not yet provide cross-device per-question nonrepeat history.
 Writing accepts camera/album photos, normalizes them to bounded JPEGs without
 original EXIF, and saves them privately in the existing child response. A
 submitted writing image cannot be replaced. Photos remain pending human review;
