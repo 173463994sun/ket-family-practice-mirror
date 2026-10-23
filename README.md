@@ -59,9 +59,14 @@ queries retain scoring, raw responses and contact details. Family text/JSON expo
 are raw-response backups without grades or analysis. Saving errors do not display
 success. QQ SMTP delivery runs only on the private backend, once per newly
 submitted group. SMTP/provider acceptance does not prove inbox receipt. Unknown
-outcomes are not automatically retried; pending events have no independent worker.
+outcomes are not automatically retried; every event can be claimed automatically
+at most once, including configuration failures. Pending events have no independent worker.
 The authorized operator has a one-time no-child-data technical test and a separate
-read-only status view. No email-sent claim appears in the child interface.
+read-only delivery-status table with state-specific manual guidance. Each assessment
+event has a private frozen-receipt download for manual handling; downloading neither
+sends mail nor changes delivery state. Recovery requires the existing operator role.
+Reading email summaries separate matches, mismatches and unanswered items and retain
+the non-official-score limitation. No email-sent claim appears in the child interface.
 RW2 keeps its authentic repeated three-person options with independent per-item selection.
 Initial registration fields render before the cloud probe completes; startup and
 HTTP waits are bounded with retry. Existing family records are not rebound to a
@@ -72,7 +77,8 @@ this is not publisher licence certification or an official Cambridge service.
 No server key, reference key registry, private child data or technical fixture
 is published in this repository.
 
-2026-10-23: private QQ mail controls added without changing the child workflow.
+2026-10-23: readable delivery failures and read-only manual recovery added without
+changing the child workflow or automatically resending any event.
 Local checks, browser fixtures and owner-authorized disposable cloud
 isolation/resume checks completed. Actual physical iPad Safari acceptance is
 recorded separately; viewport checks do not claim a physical device test.

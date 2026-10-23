@@ -1390,7 +1390,7 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
       if (typeof path !== 'string') throw failure('API_PATH_NOT_ALLOWED', '不允许访问未配置的云端接口。');
       const itemPath = /^\/api\/children\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/record$/i.test(path);
       const resultPath = /^\/api\/children\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/(?:result|receipt)$/i.test(path);
-      const adminGet = path === '/api/admin/status', adminPost = ['/api/admin/results/query', '/api/admin/results/detail', '/api/admin/mail/test', '/api/admin/mail/status'].includes(path), familyLink = path === '/api/family/link';
+      const adminGet = path === '/api/admin/status', adminPost = ['/api/admin/results/query', '/api/admin/results/detail', '/api/admin/mail/test', '/api/admin/mail/status', '/api/admin/mail/recovery'].includes(path), familyLink = path === '/api/family/link';
       if (path !== '/api/session' && path !== '/api/children' && !itemPath && !resultPath && !adminGet && !adminPost && !familyLink) throw failure('API_PATH_NOT_ALLOWED', '不允许访问未配置的云端接口。');
       const request = init || {}, method = String(request.method || 'GET').toUpperCase();
       const allowed = path === '/api/session' || resultPath || adminGet ? ['GET'] : adminPost || familyLink ? ['POST'] : path === '/api/children' ? ['GET', 'POST'] : ['GET', 'PUT'];
@@ -1969,9 +1969,23 @@ async function report(){
 async function exportObject(){if(!parent||!profile||!model)throw new Error('请先登录并选择孩子，再导出作答。');const syncSnapshot={...cloudStatus};const result=model.exportObject(),who={id:profile.id,display_name:profile.name},listeningExport=listeningSession?listeningSession.export():{status:'NOT_PREPARED'};const metadata=await voice.exportMetadata(who.id),recordings=metadata.map(v=>{const task=DATA.speaking.find(s=>s.ref===v.taskRef),index=Math.max(0,Number(v.questionRef.split('-')[1])-1);return {...v,prompt:task?.child_prompts?.[index]?.text||task?.child_prompt||'',test:task?.test,part:task?.part,source:task?.source};});const speaking=Object.fromEntries(DATA.speaking.map(s=>{const a=recordings.filter(v=>v.taskRef===s.ref);return [s.ref,{status:a.length?'LOCAL_AUDIO_RECORDED':'not_started',saved_recordings:a.length,submitted_recordings:a.filter(v=>v.status==='submitted').length,scoring:'NOT_SCORED',interpretation_limit:'仅记录单题音频，不等同完整官方口语测评或互动能力结论。'}];}));return childShareRecord({...result,format:'KET_CHILD_CLOUD_EXPORT_1',scope:assessmentScope==='assessment'?'assessment':'UNVERIFIED',result_visibility:'ADMIN_ONLY',cloud:{child_id:who.id,content_version:DATA.content_version,sync:syncSnapshot},profile:who,voice:recordings,writing_photos:Object.fromEntries(Object.entries(writingPhotos).map(([r,p])=>[r,KetWritingPhoto.metadata(p)])),speaking,sources:groups.map(g=>({ref:g.ref,test:g.test,part:g.part,source:g.source})),listening:listeningExport,speaking_sources:DATA.speaking.map(s=>({ref:s.ref,test:s.test,part:s.part,source:s.source})),privacy:'分享文件仅含当前孩子的原始作答与来源，不含成绩或分析；原始作答文字保持不变。换设备续做需要家长的有效私密链接；可选录音仅本机，音频须另附。',speaking_limit:'录音提交是本机记录，不是口语评分，也不是已经交给GPT。'});}
 function exportText(r){const lines=['KET孩子原始作答记录','孩子：'+r.profile.display_name,'导出：'+r.exported_at,'记录用途：'+r.scope,r.privacy,''];for(const g of r.groups){lines.push(`${g.ref} / ${g.component} / ${g.status}`,`来源：${g.source}；PDF页 ${g.pdf_pages.join('、')}`);for(const n of g.question_numbers)lines.push(`Q${n}: ${g.answers[n]===null?(g.pending_attachment_question_numbers.includes(n)?(r.writing_photos?.[g.ref]?'已附手写照片，待评':'手写自报完成，照片尚未收到'):'未作答'):g.answers[n]}`);lines.push('未作答：'+(g.unanswered_question_numbers.join('、')||'无'),`见题：${g.context.seen}；帮助：${g.context.help}；条件：${g.context.effort}；备注：${g.context.notes}`,`首次作答：${g.started_at||'未记录'}；提交：${g.submitted_at||'未提交'}；时钟跨度：${g.elapsed_seconds??'未记录'}秒（包含暂停/后台）`,'');}for(const [task,photo]of Object.entries(r.writing_photos||{}))lines.push(task+'手写照片：'+photo.file_name+'；已附照片待评；需另附照片文件，不含在文字导出中。');lines.push('口语（声音须另附，不据文字猜测发音）：');r.voice.forEach(v=>lines.push(`${v.questionRef} / ${v.prompt} / ${v.status} / ${v.fileName} / ${v.durable?'本机持久保存':'仅本页临时保留'} / ${v.bytes} bytes`));const lc=r.listening?.first_submission||r.listening?.current;lines.push('听力原录音：'+(r.listening?.audio?.source_filename||'未取得'),lc?('播放器观察：play事件'+lc.play_event_count+'次；ended事件'+lc.ended_event_count+'次；最后位置'+(lc.last_position_seconds??'未知')+'秒；'+lc.playback_status):'尚无听力播放记录',lc?'听见/理解：均未验证；事件不证明完整收听或独立完成。':'听力尚未开始',r.listening?.persistence?.message||'',r.listening?.answer_submission_binding?.note||'',r.interpretation_limit,'此备份不含成绩或测评分析。');return lines.join('\n');}
 function csvCell(value){const text=String(value??'');return '"'+(/^[=+\-@\t\r]/.test(text)?"'":'')+text.replace(/"/g,'""')+'"';}
+function mailStatusCopy(row){
+  const states={
+    PENDING:['待发送','先查询配置与收件箱，可下载提交回执留底。'],
+    IN_FLIGHT:['发送中或回执待核','先查Owner邮箱收件箱和垃圾箱，不要再次发送。'],
+    PROVIDER_ACCEPTED:['服务器已接受，收件待确认','请在Owner邮箱确认；服务器接受不代表邮箱已收到，不要重发。'],
+    PROVIDER_REJECTED:['服务商拒绝','核查拒绝原因和发信配置，可下载回执人工处理；不会自动重发。'],
+    SEND_FAILED:['本次发送失败','核查网络、配置和收件箱，可下载回执人工处理；不会自动重发。'],
+    OUTCOME_UNKNOWN:['投递结果未知','可能已经送达，必须先核对Owner邮箱；不要重发，可下载回执留底。'],
+    NOT_CONFIGURED:['发信未配置','本次没有进行网络发送；修复配置后由管理员处理，不会自动重发。']
+  };
+  if(row?.status==='PENDING'&&Number(row.claim_count)>0)return ['此前发送未完成，需人工核查','此事件曾被领取，不会自动再次领取；先核对邮箱，再下载回执人工处理。'];
+  return states[row?.status]||['状态待核','先查询发信状态，不根据未知状态重复发送。'];
+}
 function adminMailPanel(){
-  const label={PROVIDER_ACCEPTED:'邮件服务器已接受，邮箱收件待确认',OUTCOME_UNKNOWN:'发送结果未知，请核对邮箱，不要重复发送',IN_FLIGHT:'已领取发送任务，请查询状态，勿重复发送',PROVIDER_REJECTED:'邮件服务器拒绝，需核查后处理',SEND_FAILED:'本次发信未完成，请核查状态',NOT_CONFIGURED:'服务器发信尚未配置，没有尝试发送'};
-  return `<section class="card"><h2>后台结果邮件</h2><p>只发送到服务器固定的Owner邮箱，不发送给家长。技术测试不包含儿童资料；服务端接受不等于邮箱已收到。</p><div class="row"><button data-action="adminMailTest" ${adminMailBusy||adminMailTestRequested?'disabled':''}>发送一次技术测试邮件</button><button data-action="adminMailStatus" ${adminMailBusy?'disabled':''}>查询发信状态</button></div><p role="status">${esc(adminMailMessage||label[adminMailState?.status]||'尚未在此页发起技术测试。')}</p>${adminMailState?'<details><summary>发送回执</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere">'+esc(JSON.stringify(adminMailState,null,2))+'</pre></details>':''}</section>`;
+  const rows=Array.isArray(adminMailState?.rows)?adminMailState.rows:[];
+  const rowTable=adminMailState?.rows?`<p>最近${rows.length}条／共${Number(adminMailState.total)||0}条。提交保存成功不等于邮件必达；失败与未知事件均不会自动重发。</p><div class="table-scroll"><table><thead><tr><th>题组／事件</th><th>投递状态</th><th>原因与时间</th><th>人工处理</th></tr></thead><tbody>${rows.map(row=>{const [label,next]=mailStatusCopy(row),eligible=row.kind==='ASSESSMENT'&&/^[0-9a-f-]{36}$/i.test(row.event_id||'');return `<tr><td>${esc(row.group_ref||'技术邮件')}${row.record_revision?'<small style="display:block">保存版本 '+esc(row.record_revision)+'</small>':''}<small style="display:block;overflow-wrap:anywhere">${esc(row.event_id)}</small></td><td>${esc(label)}<small style="display:block">${esc(row.status)}</small></td><td>${esc(row.reason_code||'无已登记原因')}<small style="display:block">${esc(row.finished_at||row.claimed_at||row.created_at||'时间未记录')}</small></td><td><p>${esc(next)}</p>${eligible?'<button data-action="adminMailRecovery" data-value="'+esc(row.event_id)+'" '+(adminMailBusy?'disabled':'')+'>下载回执／人工处理</button>':''}</td></tr>`;}).join('')||'<tr><td colspan="4">暂无邮件事件。</td></tr>'}</tbody></table></div>`:'';
+  return `<section class="card"><h2>后台结果邮件</h2><p>只发送到服务器固定的Owner邮箱，不发送给家长。技术测试不包含儿童资料；服务端接受不等于邮箱已收到。</p><div class="row"><button data-action="adminMailTest" ${adminMailBusy||adminMailTestRequested?'disabled':''}>发送一次技术测试邮件</button><button data-action="adminMailStatus" ${adminMailBusy?'disabled':''}>查询发信状态</button></div><p role="status">${esc(adminMailMessage||'先查询发信状态。')}</p>${rowTable}<details><summary>人工补救怎么做</summary><ol><li>先核对指定Owner邮箱的收件箱与垃圾箱；发送中、已接受或结果未知均不要当作“未发”再次发送。</li><li>下载对应事件的提交回执，核对孩子、题组和保存版本。下载只读取该事件的冻结内容，不发送邮件，也不更改成绩。</li><li>失败或漏收时，可凭回执人工核对或联系；含联系方式和作答的文件只由管理员保管。这里没有自动重试或重发按钮。</li></ol></details>${adminMailState?'<details><summary>技术状态回执</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere">'+esc(JSON.stringify(adminMailState,null,2))+'</pre></details>':''}</section>`;
 }
 async function adminMail(action){
   if(!ADMIN_ENTRY||!parent||!adminAllowed||adminMailBusy||action==='test'&&adminMailTestRequested)return;
@@ -1982,6 +1996,21 @@ async function adminMail(action){
     const data=await protectedJSON('/api/admin/mail/'+action,{});if(!current())return;
     adminMailState=data;adminMailMessage=data.status==='PROVIDER_ACCEPTED'?'邮件服务器已接受，请在Owner邮箱核对是否收到。':data.status==='NOT_CONFIGURED'?'服务器发信尚未配置，未尝试发信。':action==='status'?'状态已读取。未知或发送中不得当作未发送重试。':'发送请求已处理，请核对回执及邮箱，不要重复发送。';
   }catch(_){if(current())adminMailMessage='未取得确定回执，请先查询状态并核对邮箱，不要重复发送。';}
+  finally{if(current()){adminMailBusy=false;render();}}
+}
+async function adminMailRecovery(eventId){
+  if(!ADMIN_ENTRY||!parent||!adminAllowed||adminMailBusy||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(eventId||''))return;
+  const row=adminMailState?.rows?.find(r=>r.event_id===eventId&&r.kind==='ASSESSMENT');if(!row)return;
+  const owner=parent.id,generation=authGeneration;
+  const current=()=>ADMIN_ENTRY&&parent?.id===owner&&generation===authGeneration&&adminAllowed&&view==='admin';
+  adminMailBusy=true;adminMailMessage='正在读取该事件的提交回执，不会发送邮件…';render();
+  try{
+    const data=await protectedJSON('/api/admin/mail/recovery',{event_id:eventId});if(!current())return;
+    if(data.recovery_only!==true||data.network_attempted!==false||data.event?.event_id!==eventId||data.event?.kind!=='ASSESSMENT'||typeof data.subject!=='string'||data.subject.length>500||typeof data.text!=='string'||data.text.length>500000)throw new Error('INVALID_RECOVERY_RECEIPT');
+    const [label,next]=mailStatusCopy(data.event),text=['KET邮件人工处理回执','仅供管理员保管；下载不代表发信或实收。','事件：'+eventId,'状态：'+label+' ('+data.event.status+')','原因：'+(data.event.reason_code||'无已登记原因'),next,'','主题：'+data.subject,'',data.text].join('\n');
+    download(new Blob([text],{type:'text/plain;charset=utf-8'}),'KET-邮件人工处理-'+eventId+'.txt');
+    adminMailMessage='已下载对应事件回执，未发送邮件、未更改投递状态；请先核对邮箱再人工处理。';
+  }catch(_){if(current())adminMailMessage='回执未能读取，请查询状态后再试；没有发送邮件，也没有更改测评记录。';}
   finally{if(current()){adminMailBusy=false;render();}}
 }
 function adminPage(){
@@ -2047,7 +2076,7 @@ async retryFamilySession(){
   if(profile&&queueCloud()){try{await instance.flush();}catch(_){/* Keep the scoped pending work and its actual failure state. */}}
 },
 async admin(){if(!ADMIN_ENTRY||blockedNav()||!parent||!adminAllowed)return;const owner=parent.id;await openProfiles();if(parent?.id!==owner||profile||!adminAllowed)return;view='admin';render();await queryAdmin(0);},
-adminMailTest(){return adminMail('test');},adminMailStatus(){return adminMail('status');},
+adminMailTest(){return adminMail('test');},adminMailStatus(){return adminMail('status');},adminMailRecovery:b=>adminMailRecovery(b.dataset.value),
 adminPrev(){return queryAdmin(Math.max(0,adminOffset-50));},adminNext(){return queryAdmin(adminOffset+50);},adminDetail:b=>loadAdminDetail(b.dataset.value),adminListCsv(){adminExport('list');},adminDetailJson(){adminExport('json');},adminDetailCsv(){adminExport('csv');},
 async retryCloud(){cloudLoading=true;cloudError='';render();await startCloud();},
 async retrySync(){if(!queueCloud())return;await cloud.flush();saveStatus();},
