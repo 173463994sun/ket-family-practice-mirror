@@ -89,3 +89,11 @@ Earlier read-only mail recovery remains unchanged; no automatic resend is added.
 Local checks, browser fixtures and owner-authorized disposable cloud
 isolation/resume checks completed. Actual physical iPad Safari acceptance is
 recorded separately; viewport checks do not claim a physical device test.
+
+2026-10-23 source display correction: Test 2 Reading Part 2 Q13 retains the
+existing display word "that" and explicitly distinguishes it from scanned "than"
+in its question-specific source disclosure. This is a declared editorial
+normalization, not a publisher-verified official erratum. Original page evidence
+is retained locally; no source PDF or new page image is published by this update.
+The Part 1 Q1 sender header and body now have an explicit line break. Source
+question data, answer rules, stable response refs and incomplete listening are unchanged.
