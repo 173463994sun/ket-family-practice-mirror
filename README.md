@@ -32,10 +32,13 @@ retain their source bindings. New source keys stay only on the private backend.
 The compatible catalog is appended without resetting the old record version;
 an outdated cached page cannot erase a newer paper's responses.
 
-Listening retains the five-Part incomplete-paper state: only the previously
-authorized Test 2 Part 2 / five-question recording is available. Parts 1, 3, 4,
-and 5 remain waiting for matched recordings; the complete listening paper cannot
-be newly submitted. No new audio is published. Real speaking prompts and
+Listening shows Test 2 Parts 1-5 in original order. Part 1 opens first for new
+attempts with its five source questions and 15 original option images. Parts 1,
+3, 4 and 5 are paper-only previews: no audio, answers or submission are enabled.
+Only the existing paired Part 2 / L1 / Q6-10 recording is available for a clearly
+labelled single-Part activity; its five responses, source keys and historical
+references remain unchanged. The complete listening paper is not ready and no
+full-paper Listening score is claimed. No new audio is published. Real speaking prompts and
 pictures remain. The speaking recorder is visible with an environment reminder,
 and supports stop, replay, local first-submission lock and audio export.
 Recording remains device-local; automatic transcription is not connected.
