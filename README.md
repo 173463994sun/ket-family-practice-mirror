@@ -23,10 +23,15 @@ new inputs can be backed up only within the previously loaded family/child scope
 network reads and saves still require authentication. Confirmed local backups
 allow a safe sign-out followed by private-link resume without losing the latest draft.
 
-Content preserved: seven native-text reading groups / 44 questions, two writing
-tasks with required images, one Test 2 Listening Part 2 group / five questions
-with the already authorized 241-second source recording, and real speaking
-prompts/pictures. The speaking recorder is visible with an environment reminder,
+The main paper now follows Test 2 in original Part order: Reading Parts 1-5
+(30 questions), then the separate Writing entry retains Parts 6-7 with original
+images. The seven reading groups / 44 questions remain in the source model;
+older Test 1 and Test 4 responses keep their original refs and source identity.
+An existing Test 2 Listening Part 2 source recording is retained in assets and
+prior response metadata. The current ordered listening entry is preparation-only:
+Parts 1, 3, 4 and 5 recordings and their dedicated renderers are not yet complete;
+it neither starts at Part 2 nor permits a new listening submission. Real speaking
+prompts/pictures are preserved. The speaking recorder is visible with an environment reminder,
 and supports stop, replay, local first-submission lock and audio export.
 Recording remains device-local; automatic transcription is not connected.
 Writing accepts camera/album photos, normalizes them to bounded JPEGs without
@@ -77,8 +82,10 @@ this is not publisher licence certification or an official Cambridge service.
 No server key, reference key registry, private child data or technical fixture
 is published in this repository.
 
-2026-10-23: readable delivery failures and read-only manual recovery added without
-changing the child workflow or automatically resending any event.
+2026-10-23: main reading and writing use verified Test 2 Part order, preserving
+stable question refs, source wording, answer rules, private cloud data and mail delivery.
+Incomplete listening is held from Part 1 instead of presenting Part 2 as the start.
+Earlier read-only mail recovery remains unchanged; no automatic resend is added.
 Local checks, browser fixtures and owner-authorized disposable cloud
 isolation/resume checks completed. Actual physical iPad Safari acceptance is
 recorded separately; viewport checks do not claim a physical device test.
