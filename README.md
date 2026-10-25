@@ -1,37 +1,45 @@
 # KET family assessment
 
-Child name and parent phone intake, family-scoped cloud progress and private administrator reports.
+The existing family-scoped assessment retains complete same-paper Reading &
+Writing Parts 1–7, a shared 60-minute deadline, private cloud drafts, protected
+first submissions, teacher-only marking and result emails. Public source question
+data and marking keys are unchanged in this interface update.
 
-## Current assessment flow
+## Clear writing navigation
 
-- The system assigns one unused complete Reading & Writing paper, Parts 1–7,
-  in original order and with original shared material. It never mixes papers.
-- Reading and Writing share a continuous 60-minute deadline. Closing the browser,
-  switching modules or devices does not pause/restart the stored deadline.
-- Saving the current answer does not submit. Final paper confirmation freezes all
-  seven Parts together. Missing responses remain unanswered.
-- Time expiry locks inputs and attempts submission. Offline, stale, or rejected
-  saves remain unconfirmed; local backups and conflict recovery remain available.
-- This is a preparation assessment, not a proctored official Cambridge exam.
-- Old individual-group drafts and first submissions remain intact. They are not
-  relabelled as timed examinations or reused as unseen complete papers.
+Writing now shows two named entrances: Email (Part 6) and Picture Story (Part 7).
+The email has a Save and Continue to Picture Story action. This is not submission;
+both writing tasks remain in the same timed paper. All four existing papers retain
+their complete original story pictures and 35-word instruction.
 
-Listening lacks a complete matched recording set and is not open as a full timed
-component. Existing listening history is retained. Full Speaking examination
-conditions are not implemented; existing local recordings are retained.
+## Listen and respond
 
-Children see Contact Teacher after confirmed submission, not marks or answers.
-The authorized administrator can prepare a parent print/PDF report containing
-name and final item outcomes, or a teacher report with actual responses, local
-source answers and comparison notes. PDF uses the browser's Print / Save as PDF.
-Default result data still omit marking keys; only the authorized admin-detail
-route requests reference answers. Public source data contain no marking keys.
+The original Listening component still lacks a full matched recording set and is
+not opened as a complete original Listening examination. Its entrance also offers
+an explicitly separate listen-and-speak activity using the existing Speaking
+questions and pictures. The Speaking entrance opens the same activity.
 
-Unscored writing stays pending, not zero. Unmeasured skills stay unmeasured.
-Local source-key matching is not an official score, calibrated CEFR level or pass
-probability. Source/version/rights and full-bank identity limits remain.
+Part 1 and Part 2 have visible stage buttons, not a hidden dropdown. The device
+reads the original question with an installed local English system voice. For the
+picture activity the computer starts with a fixed greeting and original question;
+a second fixed continuation invites the child to say more. These added greetings
+are interface guidance, not publisher questions or dynamically generated dialogue.
+No child recording is transcribed, understood, sent to an AI service, or graded.
+Only local English TTS voices are used; unavailable engines/voices are disclosed.
 
-Verification uses local synthetic records only. This release has no new live
-child assessment, production timed-save test, real iPad timed-exam check, or test
-mail. In-app PDF native printing remains unverified. Existing permissions, first
-answers, cloud CAS protection and background mail infrastructure are retained.
+The recorder retains separate first and follow-up turns, with the original source
+reference and actual guidance/playback-event conditions in metadata exports.
+Existing local recordings remain intact and cannot be overwritten after submission.
+Audio remains on the recording device; download and provide it separately to the
+teacher. Playback events do not establish that a child heard or understood audio.
+The activity does not yield an original Listening score or full official Speaking
+score. Original complete Listening recordings and full interaction/assessment
+conditions remain future requirements.
+
+No backend, scoring, timer, database, or mail configuration is changed in this
+release. Verification uses local synthetic records and microphone test tones.
+Physical iPad speech/microphone operation has not been newly verified.
+
+Children still see Contact Teacher after confirmed examination submission.
+Parent reports contain final outcomes; teacher reports contain response/key
+comparisons. Pending review is not a fabricated zero or calibrated CEFR result.
