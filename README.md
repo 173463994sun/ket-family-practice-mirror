@@ -1,40 +1,37 @@
-# KET Family Assessment
+# KET family assessment
 
-Child-facing KET assessment page for desktop and tablet browsers.
+Child name and parent phone intake, family-scoped cloud progress and private administrator reports.
 
-## This interface update
+## Current assessment flow
 
-- Shared white-chinchilla character, warm gradient header and clear skill cards.
-- Name selection, assessment introduction and an operation example before entry.
-- A prominent unfinished-task card that continues through the existing cloud checks.
-- Four skill entrances; complete shared reading material stays with each question group.
-- No wrong-answer book, re-practice route, points board or child-facing answer keys.
+- The system assigns one unused complete Reading & Writing paper, Parts 1–7,
+  in original order and with original shared material. It never mixes papers.
+- Reading and Writing share a continuous 60-minute deadline. Closing the browser,
+  switching modules or devices does not pause/restart the stored deadline.
+- Saving the current answer does not submit. Final paper confirmation freezes all
+  seven Parts together. Missing responses remain unanswered.
+- Time expiry locks inputs and attempts submission. Offline, stale, or rejected
+  saves remain unconfirmed; local backups and conflict recovery remain available.
+- This is a preparation assessment, not a proctored official Cambridge exam.
+- Old individual-group drafts and first submissions remain intact. They are not
+  relabelled as timed examinations or reused as unseen complete papers.
 
-## Preserved assessment behavior
+Listening lacks a complete matched recording set and is not open as a full timed
+component. Existing listening history is retained. Full Speaking examination
+conditions are not implemented; existing local recordings are retained.
 
-The existing source content remains unchanged: 20 reading groups / 120 objective
-questions, eight writing tasks and one paired listening group. Selection continues
-to use stable source references, exclude completed groups and resume unfinished
-work. Handwriting and typing remain response modes of the same writing task.
+Children see Contact Teacher after confirmed submission, not marks or answers.
+The authorized administrator can prepare a parent print/PDF report containing
+name and final item outcomes, or a teacher report with actual responses, local
+source answers and comparison notes. PDF uses the browser's Print / Save as PDF.
+Default result data still omit marking keys; only the authorized admin-detail
+route requests reference answers. Public source data contain no marking keys.
 
-Existing family-scoped cloud saving, revision/conflict safeguards, frozen first
-submissions, submission history and the private administrator result-email route
-remain in place. Child submission pages show **联系老师**, not marks or analysis.
-Private marking keys and SMTP credentials are not included in this mirror.
+Unscored writing stays pending, not zero. Unmeasured skills stay unmeasured.
+Local source-key matching is not an official score, calibrated CEFR level or pass
+probability. Source/version/rights and full-bank identity limits remain.
 
-## Verification and limits
-
-This release checks the visual flow with local synthetic records and responsive
-desktop/tablet browser viewports. It does not add a production cloud-write test,
-send result emails, test real children or prove operation on a physical iPad.
-Existing cloud and mail verification is retained without being re-labelled as a
-new end-to-end production test.
-
-Only the existing Test 2 Listening Part 2 has paired audio. Other listening Parts
-remain incomplete; no new audio is published in this update. Speaking recording
-remains on the recording device, without transcription or cross-device recording
-recovery. This is not a complete official KET examination, a calibrated score or a
-prediction of passing the exam.
-
-The existing source and usage-permission limits remain applicable. Interface
-publication does not certify formal question admission or platform licensing.
+Verification uses local synthetic records only. This release has no new live
+child assessment, production timed-save test, real iPad timed-exam check, or test
+mail. In-app PDF native printing remains unverified. Existing permissions, first
+answers, cloud CAS protection and background mail infrastructure are retained.

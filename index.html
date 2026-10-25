@@ -260,6 +260,10 @@ dialog h2 { font-size: 23px; }
   *, *::before, *::after { transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
 
+/* Reader-facing reports have no technical envelope or contact information. */
+#assessmentPrint{display:none}.exam-toolbar{position:sticky;top:0;z-index:4}.exam-parts{gap:6px;flex-wrap:wrap}.exam-parts [aria-current="page"]{border:2px solid var(--accent,#8a50b3)}#examRemaining{font-size:24px;font-weight:700;font-variant-numeric:tabular-nums}.passage-label{width:auto!important;min-width:32px;height:auto!important;min-height:32px;padding:4px 8px;white-space:normal}
+@media print{body>*{display:none!important}body>#assessmentPrint{display:block!important;background:#fff;color:#111;padding:0;font-size:11pt}#assessmentPrint table{width:100%;border-collapse:collapse;margin-bottom:16px}#assessmentPrint th,#assessmentPrint td{border:1px solid #aaa;padding:6px;vertical-align:top}#assessmentPrint .response{white-space:pre-wrap;overflow-wrap:anywhere}#assessmentPrint tr{break-inside:avoid}#assessmentPrint h1,#assessmentPrint h2,#assessmentPrint h3{break-after:avoid} @page{size:A4;margin:16mm}}
+
 .auth-card{max-width:680px}.auth-card label{margin-bottom:18px}.auth-card input{margin-top:6px}
 .auth-nav{margin-top:22px}.auth-nav button{font-size:14px}.warning{color:#8b4512}
 .parent-label{font-size:12px;color:#49615d;max-width:230px;overflow-wrap:anywhere}
@@ -1095,7 +1099,7 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
   }
   function validatePayload(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw failure('INVALID_PAYLOAD', '作答记录格式不正确。');
-    if (Object.keys(value).some(k => !['response_state', 'ui', 'listening_raw', 'assessment_scope', 'writing_photos'].includes(k))) throw failure('INVALID_PAYLOAD', '云端记录只接受作答、手写照片、页面进度和听力播放观察。');
+    if (Object.keys(value).some(k => !['response_state', 'ui', 'listening_raw', 'assessment_scope', 'writing_photos', 'exam_sessions'].includes(k))) throw failure('INVALID_PAYLOAD', '云端记录只接受作答、手写照片、页面进度和听力播放观察。');
     if (Object.prototype.hasOwnProperty.call(value, 'assessment_scope') && value.assessment_scope !== 'assessment') throw failure('INVALID_PAYLOAD', '此页面只保存测评记录。');
     const inspect = (item, depth) => {
       if (depth > 40) throw failure('INVALID_PAYLOAD', '记录层级过深。');
@@ -1391,6 +1395,79 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
   root.KetCloud = { createClient };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.KetCloud;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
+
+(function(root){
+'use strict';
+const SCHEMA='ket-fixed-paper-session-1',LIMIT_SECONDS=3600;
+const fail=(code)=>{throw Object.assign(new Error(code),{code,status:409});};
+const validDate=x=>typeof x==='string'&&Number.isFinite(Date.parse(x));
+const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+function refsFor(catalog,test){return Object.keys(catalog).filter(r=>catalog[r].test===test&&['Reading','Writing'].includes(catalog[r].component)).sort((a,b)=>catalog[a].part-catalog[b].part);}
+function validate(payload,catalog){
+ const sessions=payload.exam_sessions;if(sessions===undefined)return;
+ if(!sessions||typeof sessions!=='object'||Array.isArray(sessions)||Object.keys(sessions).length>4)fail('INVALID_EXAM_SESSION');
+ let running=0;
+ for(const [key,s]of Object.entries(sessions)){
+  const expected=refsFor(catalog,Number(key));
+  if(!s||Object.keys(s).sort().join(',')!==['schema','test','component','refs','started_at','deadline_at','submitted_at','status'].sort().join(',')||s.schema!==SCHEMA||String(s.test)!==key||![1,2,3,4].includes(s.test)||s.component!=='ReadingWriting'||expected.length!==7||!same(s.refs,expected)||!validDate(s.started_at)||!validDate(s.deadline_at)||Date.parse(s.deadline_at)-Date.parse(s.started_at)!==LIMIT_SECONDS*1000||!['RUNNING','SUBMITTED','TIME_EXPIRED'].includes(s.status))fail('INVALID_EXAM_SESSION');
+  if(s.status==='RUNNING'){running++;if(s.submitted_at!==null)fail('INVALID_EXAM_SESSION');}
+  else if(!validDate(s.submitted_at)||Date.parse(s.submitted_at)<Date.parse(s.started_at))fail('INVALID_EXAM_SESSION');
+  if(s.status==='TIME_EXPIRED'&&Date.parse(s.submitted_at)<Date.parse(s.deadline_at))fail('INVALID_EXAM_SESSION');
+  for(const r of expected){const d=payload.response_state?.groups?.[r];if(!d||!d.started_at)fail('INCOMPLETE_EXAM_PAPER');if(s.status==='RUNNING'?!!d.submitted:!d.submitted||d.submitted.submitted_at!==s.submitted_at)fail('INCOMPLETE_EXAM_SUBMISSION');}
+ }
+ if(running>1)fail('MULTIPLE_RUNNING_EXAMS');
+}
+function usedRefs(state){const used=new Set();function visit(s){for(const [r,g]of Object.entries(s?.groups||{}))if(g?.started_at||g?.submitted||Object.values(g?.answers||{}).some(Boolean)||g?.writing_text||g?.paper_ready)used.add(r);for(const a of s?.archives||[])visit(a);}visit(state);return used;}
+function choose(state,sessions,catalog){const active=Object.values(sessions||{}).find(s=>s.status==='RUNNING');if(active)return {session:active,test:active.test,refs:active.refs};const used=usedRefs(state);for(let test=1;test<=4;test++){const refs=refsFor(catalog,test);if(refs.length===7&&!sessions?.[test]&&refs.every(r=>!used.has(r)))return {test,refs};}return null;}
+function begin(test,refs,now=Date.now()){return {schema:SCHEMA,test,component:'ReadingWriting',refs:[...refs],started_at:new Date(now).toISOString(),deadline_at:new Date(now+LIMIT_SECONDS*1000).toISOString(),submitted_at:null,status:'RUNNING'};}
+function enforce(old,next,catalog,now=Date.now()){
+ validate(next,catalog);const a=old?.exam_sessions||{},b=next.exam_sessions||{};
+ for(const [k,s]of Object.entries(a)){
+  const n=b[k];if(!n)fail('EXAM_SESSION_REQUIRED');
+  for(const field of ['schema','test','component','refs','started_at','deadline_at'])if(!same(s[field],n[field]))fail('EXAM_CLOCK_LOCKED');
+  if(s.status!=='RUNNING'&&!same(s,n))fail('EXAM_SUBMISSION_LOCKED');
+  if(s.status==='RUNNING'&&now>=Date.parse(s.deadline_at)){
+   if(n.status==='SUBMITTED')fail('EXAM_TIME_EXPIRED');
+   for(const r of s.refs){const before=old.response_state.groups[r],after=next.response_state.groups[r];for(const f of ['answers','writing_text','writing_mode','paper_ready','context'])if(!same(before[f],after[f]))fail('EXAM_TIME_EXPIRED');if(!same(old.writing_photos?.[r]||null,next.writing_photos?.[r]||null))fail('EXAM_TIME_EXPIRED');}
+  }
+  if(s.status==='RUNNING'&&n.status==='SUBMITTED'&&Date.parse(n.submitted_at)>Date.parse(s.deadline_at))fail('EXAM_TIME_EXPIRED');
+ }
+ for(const [k,s]of Object.entries(b))if(!a[k]){
+  if(s.status!=='RUNNING'||Math.abs(Date.parse(s.started_at)-now)>120000)fail('EXAM_START_NOT_CONFIRMED');
+  const used=usedRefs(old?.response_state);if(s.refs.some(r=>used.has(r)))fail('EXAM_SOURCE_ALREADY_USED');
+ }
+}
+root.KetExam={SCHEMA,LIMIT_SECONDS,refsFor,validate,enforce,choose,begin};
+})(globalThis);
+
+(function(root){
+'use strict';
+const escape=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const labels={SOURCE_KEY_MATCH:'对（与源键一致）',SOURCE_KEY_MISMATCH:'错（与源键不一致）',UNANSWERED:'未作答',PENDING_REVIEW:'待评'};
+function select(result){const sessions=Object.values(result?.exam_sessions||{}).filter(s=>s.status!=='RUNNING').sort((a,b)=>Date.parse(b.submitted_at)-Date.parse(a.submitted_at));const session=sessions[0]||null;return {session,groups:(result?.groups||[]).filter(g=>session?session.refs.includes(g.ref):true)};}
+function render(result,name,kind='parent'){
+ const {session,groups}=select(result),teacher=kind==='teacher';
+ const status=item=>labels[item.status]||'待评';
+ const title=teacher?'教师评阅报告':'测评结果';
+ let html=`<h1>${title}</h1><p>孩子姓名：${escape(name)}</p><p>${session?`阅读与写作 · 同一套卷 · 限时60分钟`:'历史分项测评（非完整限时考试）'}</p>`;
+ html+='<p>本结果为已完成题目与本地源答案的核对，非剑桥官方成绩；未测、未评分不记0分。完整英语水平仍需教师结合听说读写证据评估。</p>';
+ for(const [component,label]of [['Listening','听力'],['Reading','阅读'],['Writing','写作']]){
+  const selected=groups.filter(g=>g.component===component&&g.total!==null);
+  html+=`<h2>${label}</h2>`;
+  if(!selected.length){html+='<p>未测／无本场有效结果</p>';continue;}
+  const items=selected.flatMap(g=>g.items||[]);const count=status=>items.filter(i=>i.status===status).length;html+=`<p>对 ${count('SOURCE_KEY_MATCH')} · 错 ${count('SOURCE_KEY_MISMATCH')} · 未作答 ${count('UNANSWERED')} · 待评 ${count('PENDING_REVIEW')}</p>`;
+  for(const group of selected){
+   html+=`<h3>Part ${escape(group.part??'')} ${group.test?'· Test '+escape(group.test):''}</h3><table><thead><tr><th>题号</th>${teacher?'<th>孩子作答</th><th>参考答案</th>':''}<th>结果</th>${teacher?'<th>对照与评阅</th>':''}</tr></thead><tbody>`;
+   for(const item of group.items||[]){const expected=item.correct_response;const answer=Array.isArray(expected)?expected.join(' / '):expected;const note=item.status==='SOURCE_KEY_MATCH'?'作答与源答案一致；不单独推断能力。':item.status==='SOURCE_KEY_MISMATCH'?'作答与源答案不一致；错误原因需老师结合原题判断。':item.status==='UNANSWERED'?'没有提交答案；不据空题断定能力缺陷。':'需人工评阅；不自动记0分。';html+=`<tr><td>${escape(item.number)}</td>${teacher?`<td class="response">${escape(item.response??'未作答')}</td><td>${escape(answer??(component==='Writing'?'开放写作，无唯一答案':'参考答案未核定'))}</td>`:''}<td>${status(item)}</td>${teacher?`<td>${note}${component==='Writing'?'<br>Content / Organisation / Language：待人工评分。':''}</td>`:''}</tr>`;}
+   html+='</tbody></table>';
+  }
+ }
+ html+='<h2>口语</h2><p>待完整施测及教师评阅，不记0分。</p>';
+ if(teacher)html+='<h2>教师评阅与训练建议</h2><p>听力：________________</p><p>阅读：________________</p><p>写作：________________</p><p>口语：________________</p><p>综合判断及证据不足：________________</p><p>上述空白待老师填写；系统未自动生成等级或通过概率。</p>';
+ return html;
+}
+root.KetAssessmentReport={render,select};
+})(globalThis);
 
 (function (global) {
   'use strict';
@@ -1914,6 +1991,13 @@ let profileBusy=false,profileNameDraft='',profileError='';
 let startupJob=null,startupJobGeneration=null;
 let writingPhotos={},photoBusy=false;
 let listeningPart=1;
+let examSessions={},examFinishing=false,examTicker=null,submissionStamp=null;
+const examCatalog=Object.fromEntries(groups.map(g=>[g.ref,{test:g.test,part:g.part,component:g.component}]));
+const activeExam=()=>Object.values(examSessions).find(s=>s.status==='RUNNING')||null;
+const currentExam=()=>Object.values(examSessions).find(s=>s.refs.includes(ref))||null;
+function examExpired(){const e=currentExam();return !!e&&(e.status!=='RUNNING'||Date.now()>=Date.parse(e.deadline_at));}
+function ensureExamEditable(){if(!currentExam())return true;if(examExpired()){toast('本场作答时间已结束，当前答案已保留。');return false;}return !examFinishing;}
+
 let bankBusy=false,bankError='',bankEmpty=false,bankOperation=0,bankReadPending=false;
 const familyResumeNotice='本设备保留有效家庭会话时，选择同一个孩子即可继续已保存的进度。换设备请让家长使用私密续做链接恢复；只有姓名或手机号不能找回记录。';
 const phoneContactNotice='姓名和手机号由家长自行填写。手机号仅作为家长联系信息，不会发送验证码，也不能凭手机号查看或找回孩子的测评记录；这不是实名认证。';
@@ -1952,10 +2036,11 @@ function hasVolatileBackups(owner){
   return false;
 }
 const uiKey=id=>'ket-cloud-ui-v1:'+id;
-function cloudPayload(){return {...(assessmentScope==='assessment'?{assessment_scope:'assessment'}:{}),response_state:model.getState(),ui:{...ui},...(Object.keys(writingPhotos).length?{writing_photos:writingPhotos}:{}),listening_raw:cache?.getItem('listening')?JSON.parse(cache.getItem('listening')):null};}
+function cloudPayload(){return {...(assessmentScope==='assessment'?{assessment_scope:'assessment'}:{}),response_state:model.getState(),...(Object.keys(examSessions).length?{exam_sessions:examSessions}:{}),ui:{...ui},...(Object.keys(writingPhotos).length?{writing_photos:writingPhotos}:{}),listening_raw:cache?.getItem('listening')?JSON.parse(cache.getItem('listening')):null};}
 function queueCloud(){if(hydrating||!profile||!model)return true;currentResult=null;try{if(!cloud)throw new Error('当前账号连接已失效，请先保留作答。');cloud.queue(cloudPayload());cloudQueueError=null;return true;}catch(e){cloudQueueError=e;cloudStatus={...cloudStatus,state:e.status===401||['AUTH_REQUIRED','AUTH_EXPIRED'].includes(e.code)?'auth_expired':'offline',error:{code:e.code,message:e.message}};saveStatus();toast(e.message||'未同步，请导出本页作答。');return false;}}
 function memoryCache(payload){const values=new Map();if(payload?.response_state)values.set('response',JSON.stringify(payload.response_state));if(payload?.listening_raw)values.set('listening',JSON.stringify(payload.listening_raw));return {getItem:k=>values.has(k)?values.get(k):null,setItem(k,v){values.set(k,String(v));if(['response','listening'].includes(k))queueCloud();},removeItem:k=>values.delete(k)};}
 function detachAccount(){
+  document.getElementById('assessmentPrint')?.remove();
   bankOperation++;bankBusy=false;bankError='';bankEmpty=false;bankReadPending=false;
   profileBusy=false;profileNameDraft='';profileError='';
   // Privacy takes precedence when another device/tab changes the authenticated
@@ -1965,7 +2050,7 @@ function detachAccount(){
   if(cloud){cloud.close();cloud=null;}
   enterEpoch++;startSequence++;renderEpoch++;releaseURL();clearInterval(timer);
   if(recording||pendingMic||stopping){Promise.resolve(recorder.cancel()).catch(()=>{});}recorder=KetLocal.createRecorder();
-  recording=false;pendingMic=false;stopping=false;photoBusy=false;writingPhotos={};capture=null;parent=null;children=[];profile=null;model=null;cache=null;ui={};voiceRecords=[];exportCache=null;listeningSession=null;hydrating=false;cloudQueueError=null;cloudStatus={state:'idle'};view='profiles';assessmentScope=null;currentResult=null;resultError='';adminAllowed=false;adminLoading=false;adminRows=[];adminDetail=null;adminError='';adminTotal=0;adminOffset=0;adminQuery={account:'',child:''};adminRequest++;
+  recording=false;pendingMic=false;stopping=false;photoBusy=false;writingPhotos={};examSessions={};clearInterval(examTicker);capture=null;parent=null;children=[];profile=null;model=null;cache=null;ui={};voiceRecords=[];exportCache=null;listeningSession=null;hydrating=false;cloudQueueError=null;cloudStatus={state:'idle'};view='profiles';assessmentScope=null;currentResult=null;resultError='';adminAllowed=false;adminLoading=false;adminRows=[];adminDetail=null;adminError='';adminTotal=0;adminOffset=0;adminQuery={account:'',child:''};adminRequest++;
   authPhone='';authChildName='';authEmail='';
   privateFamilyLink=null;familyLinkRequest++;adminMailBusy=false;adminMailMessage='';adminMailState=null;adminMailTestRequested=false;
   closeModal();$('#modalBody').textContent='';$('#identity').textContent='';$('#app').textContent='';
@@ -2099,7 +2184,7 @@ function editorialNote(g,q){
  return `<div data-source-display-note="R2-Q13"><p><b>文字编辑说明</b></p><p>本题网页将原扫描中的“than”编辑为“that”。这是网页编辑性修正，未取得出版方官方勘误。</p><p>原扫描可见文字（PDF第3页／印刷页26）：<br><span lang="en">Who says than one exhibition was more popular than the others?</span></p><p>网页展示文字：<br><span lang="en">${esc(q.prompt)}</span></p></div>`;
 }
 function source(g,q){const note=editorialNote(g,q);return `<details class="source"><summary>题目来源 · Test ${g.test} / ${g.component} Part ${g.part}${note?' · 含编辑性修正说明':''}</summary><p>${esc(g.source.filename)}<br>PDF第${g.source.pdf_pages.join('、')}页 · 印刷页${g.source.printed_pages.join('、')}<br>按Owner提供原页转为网页；来源名称保留，不代表本页是剑桥官方考试。</p>${note}</details>`;}
-function sourceLine(g){return `<p class="quiet source-compact" style="font-size:13px;margin-top:0">题源资料：<b>${esc(g.source.filename)}</b><br>Test ${g.test} · ${g.component} Part ${g.part} · PDF第${g.source.pdf_pages.join('、')}页 / 印刷页${g.source.printed_pages.join('、')}</p>`;}
+function sourceLine(g){return `<p class="quiet source-compact">Test ${g.test} · ${g.component} Part ${g.part}</p>`;}
 function parentContact(who=parent){return who?.contact_phone||who?.phone||who?.email||'已登录家庭';}
 // This comparison only guards confusing display names. It never merges child
 // identities, answers or records, which remain scoped by their server UUIDs.
@@ -2149,7 +2234,7 @@ async function enter(id,name){
   if(opened.pendingConflict){modal('<h2>发现未同步的本机作答</h2><p>云端已有其他设备的更新。两份都已保留，当前不会合并或覆盖。</p><div class="row"><button data-action="exportPending">导出未同步备份</button><button data-action="reloadCloud">保留备份并载入云端</button><button data-action="close">返回</button></div>');return;}
   const records=await voice.list(next.id);if(!current())return;bankReadPending=false;
   hydrating=true;
-  try{const restoredPhotos=opened.payload?.writing_photos||{};KetWritingPhoto.validateCollection(restoredPhotos);writingPhotos=JSON.parse(JSON.stringify(restoredPhotos));const nextCache=memoryCache(opened.payload),nextModel=KetResponse.create({groups:modelGroups,storage:nextCache,key:'response'});cache=nextCache;profile=next;model=nextModel;assessmentScope=!opened.payload||opened.payload.assessment_scope==='assessment'?'assessment':null;currentResult=null;resultError='';ui=opened.payload?.ui||{};voiceRecords=records;const listen=(DATA.listening||[])[0];listeningSession=listen?KetListening.create({storage:cache,key:'listening',profileId:profile.id,taskRef:listen.ref,audio:listen.audio}):null;}
+  try{const restoredPhotos=opened.payload?.writing_photos||{};KetWritingPhoto.validateCollection(restoredPhotos);writingPhotos=JSON.parse(JSON.stringify(restoredPhotos));const nextCache=memoryCache(opened.payload),nextModel=KetResponse.create({groups:modelGroups,storage:nextCache,key:'response',now:()=>submissionStamp?new Date(submissionStamp):new Date()});cache=nextCache;profile=next;model=nextModel;assessmentScope=!opened.payload||opened.payload.assessment_scope==='assessment'?'assessment':null;currentResult=null;resultError='';ui=opened.payload?.ui||{};examSessions=JSON.parse(JSON.stringify(opened.payload?.exam_sessions||{}));voiceRecords=records;const listen=(DATA.listening||[])[0];listeningSession=listen?KetListening.create({storage:cache,key:'listening',profileId:profile.id,taskRef:listen.ref,audio:listen.audio}):null;}
   finally{hydrating=false;}
   view=!ui.introDone?'intro':!ui.tutorialDone?'tutorial':'home';render();
   }catch(error){
@@ -2166,24 +2251,14 @@ function profilesPage(){
   }
   shell(`<div class="assessment-hero"><div><p class="eyebrow">READY TO EXPLORE?</p><h1>选择你的名字</h1><p class="muted">点自己的名字，接着上次的进度。</p></div>${mascot()}</div><section class="card"><div class="profiles">${orderedChildren().map(p=>`<button class="profile" data-action="enter" data-value="${esc(p.id)}" aria-label="${esc(childDisplayName(p))}，开始或继续" ${profileBusy?'disabled':''}>${esc(childDisplayName(p))}<small>开始／继续 →</small></button>`).join('')||'<p class="muted">先添加你的名字。</p>'}</div><form id="profileForm"><label for="profileName">添加姓名</label><div class="row"><input id="profileName" class="field" maxlength="30" autocomplete="off" placeholder="你的名字或昵称" value="${esc(profileNameDraft)}" required style="flex:1;min-width:180px" ${profileBusy?'disabled':''}><button class="primary" type="submit" ${profileBusy?'disabled':''}>${profileBusy?'正在打开…':'添加并开始 →'}</button></div>${profileError?'<p class="warning" role="alert">'+esc(profileError)+'</p>':''}</form>${cloudError?'<p class="warning">'+esc(cloudError)+'</p><button data-action="retryCloud">重试连接</button>':''}</section><details class="card"><summary>家庭设置（家长）</summary>${authLinkNotice?'<p class="note">'+esc(authLinkNotice)+'</p>':''}<p>一个手机号可添加多个孩子，每个孩子单独保存。</p><p>${esc(phoneContactNotice)}</p><p>${esc(familyResumeNotice)}</p>${familySafetyNotice()}<div class="row">${parent.contact_phone?'<button data-action="familyLink">生成家庭私密续做链接</button>':''}<button data-action="logoutPrepare">退出当前家庭</button><button data-action="registerFamily">姓名和手机号登记</button></div>${[...retainedBackups.values()].some(value=>value.parent_id===parent.id)?'<p class="note">有上次未同步的作答备份，请先保留。</p><button data-action="exportRetained">导出此账号备份</button>':''}</details>`,false);
 }
-function intro(){shell(`<div class="assessment-hero"><div><p class="eyebrow">BEFORE YOU BEGIN</p><h1>${esc(profile.name)}，先认识这次测评。</h1><p>你可以自由选择板块，一次只完成一组也可以。</p></div>${mascot()}</div><section class="card"><h2>四种技能，按需测评</h2><div class="table-scroll"><table><thead><tr><th>官方A2 Key考试组件</th><th>官方安排</th><th>本页怎么做</th></tr></thead><tbody><tr><td>Reading & Writing</td><td>60分钟 · 7 Parts · 32题<br>总成绩占比50%</td><td>分成阅读、写作两个入口。系统从阅读和写作题库安排完整题组，不用选套卷。已提交的题组不重复安排。</td></tr><tr><td>Listening</td><td>约30分钟 · 5 Parts · 25题<br>占比25%</td><td>系统只安排已配齐原录音的题组；其他部分录音待齐。</td></tr><tr><td>Speaking</td><td>通常两人8—10分钟 · 2 Parts<br>占比25%</td><td>看题录音、回听并提交；不替代双人互动考试。</td></tr></tbody></table></div><p class="source">官方考试是三个组件，本页用四个技能入口。每个题组保留同一来源的完整材料和原题对应关系；不同题组可以来自不同原卷，不拼接共享材料；整套听力录音尚未齐备，Part 2单项不能换算完整听力成绩。官方安排：<a href="https://www.cambridgeenglish.org/exams-and-tests/qualifications/key/format/" target="_blank" rel="noopener noreferrer">Cambridge A2 Key考试说明</a>。</p></section><section class="card"><h2>你需要知道</h2><ul><li>阅读：一次看一道题，共享文章始终可以查看；整组提交前可以返回修改。</li><li>写作：邮件至少25词，三图故事至少35词。可网页打字，也可纸上写好后拍照上传。</li><li>听力：可查看第2套Part 1—5原题，Part 2可播放原录音并单独作答；其他部分待配套录音。口语可点击录音按钮，停止后回听并提交。</li><li>未提交内容会尝试自动保存。提交会锁定本轮首次答案；提交后由老师查看结果。</li><li>测评结果由老师查看和反馈，本页不直接展示成绩或分析。</li></ul><div class="note">计时从题组安排保存到提交，包含阅读、暂停或后台停留；它是时钟跨度，包含暂停和切换后台，不能当作专注用时。</div><button class="primary" data-action="introDone">看操作示例 →</button></section>`,false);}
-function tutorial(){shell(`<div class="assessment-hero"><div><p class="eyebrow">TRY THE CONTROLS</p><h1>先试一试，不计入作答。</h1></div>${mascot()}</div><section class="card"><h3><span class="step">1</span>点选答案</h3><p>下面只练操作：请点一下B。</p><div class="choices" id="demoChoices">${['A','B','C'].map(x=>`<button class="choice" data-action="demoChoice"><span class="letter">${x}</span><span>操作示例 ${x}</span></button>`).join('')}</div><h3><span class="step">2</span>输入文字</h3><label>试着输入一个英文词<input class="field" id="demoWord" placeholder="输入后可以修改" autocomplete="off"></label><p class="muted" id="demoMessage">这些内容不会进入测评记录。</p></section><section class="card"><h3><span class="step">3</span>听力和提交</h3><p>听力按Part 1—5列出原题；Part 2有配套原录音，可单独作答，其他部分暂不可作答。口语可以录音、回听并提交。提交后由老师查看结果。口语录音保留在本设备，可下载另交老师。</p><button class="primary" data-action="tutorialDone">明白了，选择板块 →</button></section>`,false);}
-function home(){
- const state=model.getState(),done=completedRefs(state);
- // This card summarizes the loaded snapshot. Its button still uses openModule,
- // which refreshes the cloud and performs the existing eligibility/CAS checks.
- const underway=['Reading','Writing','Listening'].map(m=>bankPick(m)).filter(g=>g&&draftHasWork(state.groups[g.ref],g.ref));
- underway.sort((a,b)=>String(state.groups[b.ref].updated_at||state.groups[b.ref].started_at||'').localeCompare(String(state.groups[a.ref].updated_at||state.groups[a.ref].started_at||''))||a.ref.localeCompare(b.ref));
- const resume=underway[0],names={Reading:'阅读',Writing:'写作',Listening:'听力'};
- const position=resume?Math.max(0,Math.min(Number(ui['q_'+resume.ref])||0,resume.questions.length-1)):0;
- const resumeLabel=resume?.component==='Reading'?`第${position+1}题 / 共${resume.questions.length}题`:resume?.component==='Writing'?'继续这项写作':'继续这个听力题组';
- const continuation=resume?`<section class="card active-assessment-card"><div class="row between"><div><p class="eyebrow">CONTINUE YOUR ASSESSMENT</p><h2>继续未完成的${names[resume.component]}</h2><p class="muted">${resumeLabel}</p></div><button class="primary" data-action="module" data-value="${resume.component}">继续作答 →</button></div></section>`:'';
- shell(`<section class="assessment-hero"><div><p class="eyebrow">HELLO, ${esc(profile.name)}</p><h1>今天想测哪一块？</h1><p class="muted">不必一次做完，可以自由选择板块。</p></div>${mascot()}</section><div class="overview-stats" aria-label="测评进度"><div class="progress-stat"><strong>${allTasks.filter(g=>done.has(g.ref)).length}</strong><span>已提交题组</span></div><div class="progress-stat"><strong>${allTasks.filter(g=>!done.has(g.ref)&&draftHasWork(state.groups[g.ref],g.ref)).length}</strong><span>未完成题组</span></div><div class="progress-stat"><strong>4</strong><span>测评板块</span></div></div>${continuation}<div class="grid module-grid">${[['Listening','🎧','听力','Test 2 · Part 2可作答 · 其余待录音'],['Speaking','💬','口语','录音作答 · 回听与提交'],['Reading','📖','阅读','20个完整题组 · 共120题'],['Writing','✍️','写作','共8项 · 打字或手写']].map(([m,i,n,s])=>`<button class="module skill-card" data-action="module" data-value="${m}"><span class="icon module-icon" aria-hidden="true">${i}</span><b>${m}<br>${n}</b><small class="module-meta">${s}</small></button>`).join('')}</div><section class="card"><div class="row between"><div><h3>准备好再开始</h3><p class="muted">系统安排完整题组，已提交的不会重复安排。</p></div><div class="row"><button data-action="intro">考试介绍</button><button data-action="tutorial">操作示例</button><button data-action="report">提交记录</button></div></div></section>`);
-}
+function intro(){shell(`<div class="assessment-hero"><div><p class="eyebrow">BEFORE YOU BEGIN</p><h1>${esc(profile.name)}，先认识这次测评。</h1><p>本次使用完整固定套卷，按考试组件限时完成。</p></div>${mascot()}</div><section class="card"><h2>四种技能，按需测评</h2><div class="table-scroll"><table><thead><tr><th>官方A2 Key考试组件</th><th>官方安排</th><th>本页怎么做</th></tr></thead><tbody><tr><td>Reading & Writing</td><td>60分钟 · 7 Parts · 32题<br>总成绩占比50%</td><td>阅读与写作使用同一套卷，Part 1—7共用60分钟。系统安排尚未使用的完整套卷，不混套。</td></tr><tr><td>Listening</td><td>约30分钟 · 5 Parts · 25题<br>占比25%</td><td>五部分匹配录音未齐，整场听力暂不开放。</td></tr><tr><td>Speaking</td><td>通常两人8—10分钟 · 2 Parts<br>占比25%</td><td>待完整互动施测及评分条件齐备后开放。</td></tr></tbody></table></div><p class="source">官方考试是三个组件，本页用四个技能入口。每场阅读写作只使用同一套原卷，不拼卷；听力材料未齐，不把单项冒充整卷。官方安排：<a href="https://www.cambridgeenglish.org/exams-and-tests/qualifications/key/format/" target="_blank" rel="noopener noreferrer">Cambridge A2 Key考试说明</a>。</p></section><section class="card"><h2>你需要知道</h2><ul><li>阅读：一次看一道题，共享文章始终可以查看；本场交卷前可以返回修改。</li><li>写作：邮件至少25词，三图故事至少35词。可网页打字，也可纸上写好后拍照上传。</li><li>听力和口语完整施测材料与条件待齐，暂不开放整场考试；已有历史记录保留。</li><li>保存本题不会交卷；提交本场考试才锁定整卷。时限到达后停止作答，并尝试交卷；未同步成功会明确提示。</li><li>测评结果由老师查看和反馈，本页不直接展示成绩或分析。</li></ul><div class="note">阅读与写作从点击开始并获云端确认后连续计时60分钟，刷新、切换或关闭页面不会重置。不是官方认证考试，限时核对不能直接换算英语等级。</div><button class="primary" data-action="introDone">看操作示例 →</button></section>`,false);}
+function tutorial(){shell(`<div class="assessment-hero"><div><p class="eyebrow">TRY THE CONTROLS</p><h1>先试一试，不计入作答。</h1></div>${mascot()}</div><section class="card"><h3><span class="step">1</span>点选答案</h3><p>下面只练操作：请点一下B。</p><div class="choices" id="demoChoices">${['A','B','C'].map(x=>`<button class="choice" data-action="demoChoice"><span class="letter">${x}</span><span>操作示例 ${x}</span></button>`).join('')}</div><h3><span class="step">2</span>输入文字</h3><label>试着输入一个英文词<input class="field" id="demoWord" placeholder="输入后可以修改" autocomplete="off"></label><p class="muted" id="demoMessage">这些内容不会进入测评记录。</p></section><section class="card"><h3><span class="step">3</span>听力和提交</h3><p>听力按Part 1—5列出原题；整场听力材料未齐，暂不开放；完整口语施测条件待齐。提交后由老师查看结果。口语录音保留在本设备，可下载另交老师。</p><button class="primary" data-action="tutorialDone">明白了，选择板块 →</button></section>`,false);}
+function home(){const e=activeExam();shell(`<section class="assessment-hero"><div><p class="eyebrow">HELLO, ${esc(profile.name)}</p><h1>准备开始测评</h1><p class="muted">按完整套卷完成，阅读与写作共用60分钟。</p></div>${mascot()}</section>${e?'<section class="card"><h2>继续阅读与写作考试</h2><button class="primary" data-action="module" data-value="Reading">继续作答</button></section>':''}<div class="grid module-grid">${[['Listening','🎧','听力','材料待齐，暂未开放'],['Speaking','💬','口语','完整施测条件待齐'],['Reading','📖','阅读','完整套卷 · Part 1—5'],['Writing','✍️','写作','同卷 Part 6—7']].map(([m,i,n,t])=>`<button class="module skill-card" data-action="module" data-value="${m}"><span class="icon module-icon">${i}</span><b>${n}</b><small>${t}</small></button>`).join('')}</div><section class="card row"><button data-action="intro">考试介绍</button><button data-action="tutorial">操作示例</button><button data-action="report">提交记录</button></section>`);}
+
 function restoreBankPayload(payload){
  const photos=payload?.writing_photos||{};KetWritingPhoto.validateCollection(photos);
- const nextCache=memoryCache(payload),nextModel=KetResponse.create({groups:modelGroups,storage:nextCache,key:'response'});
- writingPhotos=JSON.parse(JSON.stringify(photos));cache=nextCache;model=nextModel;ui=payload?.ui||{};
+ const nextCache=memoryCache(payload),nextModel=KetResponse.create({groups:modelGroups,storage:nextCache,key:'response',now:()=>submissionStamp?new Date(submissionStamp):new Date()});
+ writingPhotos=JSON.parse(JSON.stringify(photos));cache=nextCache;model=nextModel;ui=payload?.ui||{};examSessions=JSON.parse(JSON.stringify(payload?.exam_sessions||{}));
  assessmentScope=!payload||payload.assessment_scope==='assessment'?'assessment':null;currentResult=null;resultError='';
  const listen=(DATA.listening||[])[0];listeningSession=listen?KetListening.create({storage:cache,key:'listening',profileId:profile.id,taskRef:listen.ref,audio:listen.audio}):null;
 }
@@ -2193,33 +2268,52 @@ function bankPage(){
 }
 async function openModule(m){
  if(blockedNav()||!profile||!model||!['Reading','Writing','Listening','Speaking'].includes(m))return;
- if(m==='Speaking'){module=m;view='task';ref=ui.Speaking||'S1';qi=Number(ui['q_'+ref])||0;render();return;}
- const operation=++bankOperation,owner=parent?.id,child=profile.id,generation=authGeneration,entryEpoch=enterEpoch,instance=cloud;
- const current=()=>operation===bankOperation&&parent?.id===owner&&profile?.id===child&&authGeneration===generation&&enterEpoch===entryEpoch&&cloud===instance;
+ if(m==='Listening'||m==='Speaking'){module=m;view='componentUnavailable';render();return;}
+ const operation=++bankOperation,owner=parent?.id,child=profile.id,generation=authGeneration,instance=cloud;
+ const current=()=>operation===bankOperation&&parent?.id===owner&&profile?.id===child&&authGeneration===generation&&cloud===instance;
  module=m;view='bank';bankBusy=true;bankError='';bankEmpty=false;render();
  try{
-  // A cached "saved" state does not prove another device has not submitted.
-  // Preserve/flush first, then GET the current revision before allocating.
-  if(!bankReadPending){if(!queueCloud())throw new Error('已有作答尚未同步，请先恢复连接。');await instance.flush();if(!current())return;}
-  // If a GET fails after that successful flush, open() has an unloaded scope.
-  // Retry that read directly; trying to queue into it would deadlock recovery.
-  bankReadPending=true;
-  const opened=await instance.open(child);if(!current())return;bankReadPending=false;
-  if(opened.pendingConflict)throw new Error('另一台设备有新进度。请先备份当前作答，再载入云端进度。');
+  if(!bankReadPending){if(!queueCloud())throw new Error('SAVE_PENDING');await instance.flush();if(!current())return;}
+  bankReadPending=true;const opened=await instance.open(child);if(!current())return;bankReadPending=false;
+  if(opened.pendingConflict)throw new Error('REVISION_CONFLICT');
   hydrating=true;try{restoreBankPayload(opened.payload);}finally{hydrating=false;}
-  const next=bankPick(m);
-  if(!next){bankEmpty=true;return;}
-  // Persist the assignment (including its original ref) with CAS before showing
-  // any new source content. Two competing devices cannot silently pick twice.
-  ref=next.ref;ui[m]=ref;qi=Number(ui['q_'+ref])||0;
-  hydrating=true;try{model.start(ref);}finally{hydrating=false;}
-  if(!queueCloud())throw new Error('题组尚未保存，暂不开始作答。');
-  await instance.flush();if(!current())return;
-  if(instance.getStatus().state!=='saved')throw new Error('题组尚未确认保存，请重试。');
-  listeningPart=next.part;view='task';
- }catch(error){if(current())bankError=cloudStatus.state==='conflict'?'另一台设备有新进度。请先备份，再载入云端进度。':error.status===401?'家庭连接已失效，请让家长恢复进度。':'连接或保存未完成。已有作答仍保留，请重试；不会因此重复安排已完成题组。';}
+  const picked=KetExam.choose(model.getState(),examSessions,examCatalog);
+  if(!picked){view='examUnavailable';return;}
+  if(!picked.session){view='examReady';return;}
+  ref=picked.refs.find(r=>find(r).component===m)||picked.refs[0];qi=Number(ui['q_'+ref])||0;view='task';
+ }catch(error){if(current())bankError=cloudStatus.state==='conflict'?'另一台设备有新进度。请先备份，再载入云端进度。':'连接或保存未完成，请重试；已有作答仍保留。';}
  finally{if(current()){bankBusy=false;render();}}
 }
+function componentUnavailable(){const listening=module==='Listening';shell(`<section class="card"><h1>${listening?'听力':'口语'}整场测评暂未开放</h1><p>${listening?'完整五部分的配套音频尚未齐备，暂不开始听力考试。已有单项作答仍保留。':'现有录音题不能代替完整双人互动与考官评分，暂不开始正式口语组件。已有录音和历史作答仍保留。'}</p><button data-action="home">返回</button></section>`);}
+function examReady(){const picked=KetExam.choose(model.getState(),examSessions,examCatalog);if(!picked)return examUnavailable();shell(`<section class="card"><h1>阅读与写作</h1><p>同一套卷，Part 1—7，共32题，限时60分钟。</p><p>点击开始后连续计时。切换板块、关闭页面或换设备不会暂停；请在时限内上传手写照片。</p><p>“保存本题”只保存作答；“提交本场考试”会交齐本卷七部分并锁定答案，空题保留为未作答。</p><button class="primary" data-action="beginExam">开始考试（60分钟）</button><button data-action="home">稍后开始</button></section>`);}
+function examUnavailable(){shell('<section class="card"><h1>暂时没有新的完整套卷</h1><p>现有材料已有作答或使用记录，不会把旧题重新包装成未见的新考试。历史作答仍保留。</p><button data-action="report">查看提交记录</button><button data-action="home">返回</button></section>');}
+async function beginExam(){
+ if(bankBusy||blockedNav()||!model)return;const picked=KetExam.choose(model.getState(),examSessions,examCatalog);if(!picked||picked.session)return;
+ const owner=parent.id,child=profile.id,instance=cloud;bankBusy=true;
+ try{hydrating=true;try{const session=KetExam.begin(picked.test,picked.refs);examSessions[picked.test]=session;for(const r of session.refs)model.start(r);}finally{hydrating=false;}
+  ref=picked.refs[0];module='Reading';qi=0;ui.Reading=ref;if(!queueCloud())throw new Error('SAVE_PENDING');await instance.flush();if(parent?.id!==owner||profile?.id!==child||cloud!==instance)return;if(instance.getStatus().state!=='saved')throw new Error('SAVE_PENDING');view='task';
+ }catch(_){bankError='考试开始尚未获云端确认。请保留本页，恢复连接后载入云端进度；不要重复开始。';view='bank';}
+ finally{bankBusy=false;render();}
+}
+function examBar(g){const e=currentExam();if(!e)return '';return `<section class="card exam-toolbar"><div class="row between"><b>阅读与写作 · 共60分钟</b><span id="examRemaining" role="timer"></span></div><div class="row exam-parts">${e.refs.map(r=>`<button data-action="examPart" data-value="${r}" ${r===ref?'aria-current="page"':''}>Part ${find(r).part}</button>`).join('')}</div><p class="quiet" id="answerProgress"></p><div class="row"><button data-action="saveCurrent">保存本题</button><button class="primary" data-action="reviewExam" ${e.status!=='RUNNING'?'disabled':''}>提交本场考试</button></div></section>`;}
+function updateExamProgress(){const g=find(ref),d=g&&model?.getState().groups[ref],node=$('#answerProgress');if(node&&g){const answered=countAnswered(g,d);node.textContent=`本部分已答 ${answered}/${g.question_numbers.length}`+(answered<g.question_numbers.length?' · 有题未答':'');}}
+function tickExam(){
+ const e=activeExam();if(!profile||!model||!e)return;const remaining=Math.max(0,Math.ceil((Date.parse(e.deadline_at)-Date.now())/1000));const node=$('#examRemaining');if(node)node.textContent=String(Math.floor(remaining/60)).padStart(2,'0')+':'+String(remaining%60).padStart(2,'0');updateExamProgress();
+ if(!remaining&&view==='task'&&currentExam()===e&&!examFinishing){document.querySelectorAll('#wordAnswer,#writingText,[data-action="answer"],[data-action="writingMode"],#paperCamera,#paperFile').forEach(n=>n.disabled=true);finishExam(true);}
+}
+async function saveCurrent(){if(!model||examFinishing)return;if(!queueCloud())return;try{await cloud.flush();toast(cloud.getStatus().state==='saved'?'本题已保存，尚未交卷。':'尚未确认保存，请保留本页。');}catch(_){toast('尚未保存成功，请保留本页。');}}
+function reviewExam(){const e=currentExam();if(!e||e.status!=='RUNNING')return;if(examExpired())return finishExam(true);const missing=e.refs.flatMap(r=>{const g=find(r),d=model.getState().groups[r];return countAnswered(g,d)<g.question_numbers.length?g.question_numbers.filter(n=>g.component==='Writing'?!countAnswered(g,d):!String(d.answers[n]||'').trim()):[];});modal(`<h2>提交本场阅读与写作考试？</h2>${missing.length?`<p>有题未答：${missing.join('、')}。</p>`:'<p>32题已作答。</p>'}<p>提交后，本卷Part 1—7答案锁定。</p><button data-action="close">继续检查</button><button class="primary" data-action="finishExam">确认提交本场考试</button>`);}
+async function finishExam(expired=false){
+ const e=currentExam();if(!e||e.status!=='RUNNING'||examFinishing)return;if(photoBusy){toast('照片正在处理；时限到达后不再接收新作答。');return;}
+ const owner=parent.id,child=profile.id,instance=cloud;examFinishing=true;closeModal();
+ try{
+  // One queued payload / CAS contains all seven immutable first submissions.
+  hydrating=true;submissionStamp=new Date().toISOString();try{let at=null;for(const r of e.refs){const snapshot=model.submit(r);at=at||snapshot.submitted_at;if(snapshot.submitted_at!==at){throw new Error('SUBMISSION_TIME_MISMATCH');}}e.submitted_at=at;e.status=expired?'TIME_EXPIRED':'SUBMITTED';}finally{hydrating=false;submissionStamp=null;}
+  if(!queueCloud())throw new Error('SAVE_PENDING');await instance.flush();if(parent?.id!==owner||profile?.id!==child||cloud!==instance)return;if(instance.getStatus().state!=='saved')throw new Error('SAVE_PENDING');view='report';render();
+ }catch(_){toast('交卷尚未确认，作答已保留。请备份后恢复云端进度，不要关闭页面。');}
+ finally{examFinishing=false;}
+}
+
 function render(){
   renderEpoch++;releaseURL();
   if(ADMIN_ENTRY){
@@ -2227,7 +2321,8 @@ function render(){
     if(!adminAllowed){shell(`<section class="card"><h1>此入口仅供管理员使用</h1><p>当前家庭没有后台权限。</p><a class="primary" href="${esc(CONFIG.siteUrl)}">返回孩子测评入口</a></section>`,false);return;}
     view='admin';return adminPage();
   }
-  if(!profile||view==='profiles')return profilesPage();if(view==='intro')return intro();if(view==='tutorial')return tutorial();if(view==='home')return home();if(view==='bank')return bankPage();if(view==='report')return report();if(module==='Listening')return listening();if(module==='Speaking')return speaking();return task();
+  clearInterval(examTicker);if(profile&&model)examTicker=setInterval(tickExam,1000);
+  if(!profile||view==='profiles')return profilesPage();if(view==='examReady')return examReady();if(view==='examUnavailable')return examUnavailable();if(view==='componentUnavailable')return componentUnavailable();if(view==='intro')return intro();if(view==='tutorial')return tutorial();if(view==='home')return home();if(view==='bank')return bankPage();if(view==='report')return report();if(module==='Listening')return listening();if(module==='Speaking')return speaking();task();tickExam();return;
 }
 function listeningReady(g){return !!g?.audio&&g.audio.pairing_status==='TRANSCRIPT_CONTENT_MATCHED';}
 function listeningPlayed(){return !!listeningSession&&listeningSession.get().playback_status!=='NOT_PLAYED';}
@@ -2251,21 +2346,21 @@ function listening(){
  for(const type of ['play','pause','seeking','seeked','ratechange','ended','error'])player.addEventListener(type,()=>{if(!current())return;session.recordEvent(type,{currentTime:Number.isFinite(player.currentTime)?player.currentTime:0,playbackRate:player.playbackRate,ended:player.ended});if(type==='play'&&!instance.draft(g.ref).submitted)instance.start(g.ref);const canAnswer=!instance.draft(g.ref).submitted&&listeningCanSubmit();document.querySelectorAll('[data-listening-answer]').forEach(input=>input.disabled=!canAnswer);const submit=$('[data-action="reviewListening"]');if(submit)submit.disabled=!canAnswer;const status=$('#listenStatus');if(status)status.textContent=type==='error'?'录音加载失败，答案仍保留为草稿。':player.ended?'录音播放结束。':player.paused?'已暂停，作答保留。':'正在播放。';saveStatus();});
 }
 function paragraphs(g,current){return (g.materials||[]).map(m=>`<article class="passage">${m.name||m.title||m.label?`<h3>${m.label?`<span class="passage-label">${esc(m.label)}</span>`:''}${esc(m.name||m.title||'')}</h3>`:''}${m.portrait_image?`<img class="original-image" style="max-width:150px;height:auto" src="${esc(m.portrait_image)}" alt="${esc(m.portrait_alt||'原文人物配图')}">`:''}${m.subtitle?`<p><em>${esc(m.subtitle)}</em></p>`:''}${m.paragraphs.map(p=>`<p>${esc(p).replace(/\[\[(\d+)\]\]/g,(_,n)=>`<span class="gap ${+n===+current?'current':''}">(${n}) ____</span>`)}</p>`).join('')}</article>`).join('');}
-function task(){const g=find(ref);qi=Math.max(0,Math.min(qi,g.questions.length-1));if(!model.draft(ref).submitted)ui[module]=ref;ui['q_'+ref]=qi;persistUI();const d=model.draft(ref),locked=!!d.submitted,q=g.questions[qi];
-const top=`<div class="row between task-heading"><p class="eyebrow">${esc(module)} · PART ${g.part}</p><span class="tag">${locked?'已保存的作答':'作答中'}</span></div>${sourceLine(g)}`;
+function task(){const g=find(ref);qi=Math.max(0,Math.min(qi,g.questions.length-1));if(!model.draft(ref).submitted)ui[module]=ref;ui['q_'+ref]=qi;persistUI();const d=model.draft(ref),locked=!!d.submitted||examExpired(),q=g.questions[qi];
+const top=examBar(g)+`<div class="row between task-heading"><p class="eyebrow">${esc(module)} · PART ${g.part}</p><span class="tag">${locked?'已保存的作答':'作答中'}</span></div>${sourceLine(g)}`;
 if(g.component==='Writing'){shell(top+writing(g,d));return;}
 const shared=g.materials.length?`<aside class="card passages" aria-label="共享阅读材料"><p class="eyebrow">SHARED READING · 完整文章</p><h2>${esc(g.title)}</h2>${g.subtitle?`<p class="muted">${esc(g.subtitle)}</p>`:''}${g.decorative_image?`<img class="original-image wolf" src="${g.decorative_image}" alt="${esc(g.decorative_image_alt||'原文配图')}">`:''}${g.example?`<p class="quiet">原题示例（不计分）：${esc(g.example.text||JSON.stringify(g.example))}</p>`:''}${paragraphs(g,q.number)}</aside>`:'';
 const stim=q.stimulus?`<div class="stimulus">${q.stimulus.to?`<small>To: ${esc(q.stimulus.to)}<br>From: ${esc(q.stimulus.from)}</small><br>`:''}${q.stimulus.title?`<h3>${esc(q.stimulus.title)}</h3>`:''}${esc(q.stimulus.text)}</div>`:'';
 const answer=g.response_type==='TEXT'?`<label for="wordAnswer">Your answer · ONE word<input id="wordAnswer" class="field" value="${esc(d.answers[q.number]||'')}" ${locked?'disabled':''} autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="80"></label><p class="muted">对应文章中的 (${q.number}) 空。</p>`:`<div class="choices" role="group" aria-label="第${q.number}题选项">${q.choices.map(c=>`<button class="choice ${d.answers[q.number]===c.value?'selected':''}" aria-pressed="${d.answers[q.number]===c.value}" data-action="answer" data-value="${c.value}" ${locked?'disabled':''}><span class="letter">${c.value}</span><span>${esc(c.text)}</span></button>`).join('')}</div>`;
-shell(top+`<p class="muted">${esc(g.instruction)}</p><div class="task-layout" ${shared?'':'style="grid-template-columns:1fr;max-width:850px;margin:auto"'}>${shared}<section class="card question-card task-surface" aria-label="当前题目"><div class="qnum">QUESTION ${q.number} · 第${qi+1} / ${g.questions.length}题</div><div class="progress"><span style="width:${(qi+1)/g.questions.length*100}%"></span></div>${stim}<h2 class="question">${esc(q.prompt||(g.response_type==='TEXT'?'Write ONE word for gap '+q.number+'.':'Choose the correct answer.'))}</h2>${g.part===2?'<p class="quiet">本组每题都从同样三位人物中选择；请根据当前题干重新判断。</p>':''}${answer}<div class="navrow"><button data-action="prev" ${qi===0?'disabled':''}>← 上一题</button>${qi<g.questions.length-1?'<button class="primary" data-action="next">下一题 →</button>':'<button class="primary" data-action="review">提交</button>'}</div>${source(g,q)}</section></div><section class="card"><div class="row between"><div><h3>这是一整个题组</h3><p class="muted">共享材料保持完整；整组提交后保留首次答案，下次安排新的材料。</p></div><button data-action="${locked?'report':'review'}">${locked?'提交':'提交'}</button></div></section>`);
+shell(top+`<p class="muted">${esc(g.instruction)}</p><div class="task-layout" ${shared?'':'style="grid-template-columns:1fr;max-width:850px;margin:auto"'}>${shared}<section class="card question-card task-surface" aria-label="当前题目"><div class="qnum">QUESTION ${q.number} · 第${qi+1} / ${g.questions.length}题</div><div class="progress"><span style="width:${(qi+1)/g.questions.length*100}%"></span></div>${stim}<h2 class="question">${esc(q.prompt||(g.response_type==='TEXT'?'Write ONE word for gap '+q.number+'.':'Choose the correct answer.'))}</h2>${g.part===2?'<p class="quiet">本组每题都从同样三位人物中选择；请根据当前题干重新判断。</p>':''}${answer}<div class="navrow"><button data-action="prev" ${qi===0?'disabled':''}>← 上一题</button>${qi<g.questions.length-1?'<button class="primary" data-action="next">下一题 →</button>':'<button class="primary" data-action="saveCurrent">保存本题</button>'}</div>${source(g,q)}</section></div><section class="card"><div class="row between"><div><h3>当前部分</h3><p class="muted">本题保存后仍可修改；只有提交本场考试才会锁定整卷答案。</p></div><button data-action="${locked?'report':'review'}">${locked?'查看提交记录':'提交本场考试'}</button></div></section>`);
 }
 function photoFields(g,locked){const photo=writingPhotos[g.ref];return `<div class="photo-inputs"><div class="row"><label class="file-label">拍照上传<input id="paperCamera" type="file" accept="image/*" capture="environment" aria-label="拍照上传手写照片" ${locked||photoBusy?'disabled':''}></label><label class="file-label">从相册选择<input id="paperFile" type="file" accept="image/*" aria-label="从相册选择手写照片" ${locked||photoBusy?'disabled':''}></label></div>${photoBusy?'<p role="status">正在保存照片…</p>':''}${photo?`<img class="original-image" style="max-width:760px" src="${KetWritingPhoto.dataURL(photo)}" alt="${g.ref}已添加的手写照片"><p class="quiet">已添加照片，请确认正文清晰。暂不进行文字识别或自动评分。</p><button data-action="downloadWritingPhoto" data-value="${g.ref}">下载手写照片</button>`:'<p class="quiet">写好后拍下正文，或选择已有照片。</p>'}</div>`;}
-function writing(g,d){const locked=!!d.submitted,prompt=String(g.writing?.prompt||''),separatePrompt=prompt.replace(/\s+/gu,' ').trim()!==String(g.instruction||'').replace(/\s+/gu,' ').trim();return `<section class="card"><h2>${esc(g.title)}</h2><p class="question">${esc(g.instruction)}</p>${paragraphs(g)}${g.writing_image?`<img class="original-image story" src="${g.writing_image}" alt="原题三幅完整故事图片，按从左到右顺序">`:''}${prompt&&separatePrompt?`<p>${esc(prompt)}</p>`:''}${g.writing?.bullets?.length?`<ul>${g.writing.bullets.map(point=>`<li>${esc(point)}</li>`).join('')}</ul>`:''}<p><b>Write ${g.minimum_words} words or more.</b></p><div class="row"><button data-action="writingMode" data-value="typing" class="${d.writing_mode==='typing'?'primary':''}" ${locked||photoBusy?'disabled':''}>网页打字</button><button data-action="writingMode" data-value="paper" class="${d.writing_mode==='paper'?'primary':''}" ${locked||photoBusy?'disabled':''}>纸上手写</button></div><div class="divider"></div>${d.writing_mode==='typing'?`<label for="writingText">Your writing</label><textarea id="writingText" class="field writing" placeholder="Write your answer here…" ${locked?'disabled':''} spellcheck="false">${esc(d.writing_text)}</textarea><p class="wordcount" id="wordCount">${words(d.writing_text)} words · 原题要求至少${g.minimum_words}词</p>`:photoFields(g,locked)}<button class="primary" data-action="${locked?'report':'review'}" ${photoBusy?'disabled':''}>${locked?'提交':'提交'}</button>${source(g)}</section>`;}
+function writing(g,d){const locked=!!d.submitted||examExpired(),prompt=String(g.writing?.prompt||''),separatePrompt=prompt.replace(/\s+/gu,' ').trim()!==String(g.instruction||'').replace(/\s+/gu,' ').trim();return `<section class="card"><h2>${esc(g.title)}</h2><p class="question">${esc(g.instruction)}</p>${paragraphs(g)}${g.writing_image?`<img class="original-image story" src="${g.writing_image}" alt="原题三幅完整故事图片，按从左到右顺序">`:''}${prompt&&separatePrompt?`<p>${esc(prompt)}</p>`:''}${g.writing?.bullets?.length?`<ul>${g.writing.bullets.map(point=>`<li>${esc(point)}</li>`).join('')}</ul>`:''}<p><b>Write ${g.minimum_words} words or more.</b></p><div class="row"><button data-action="writingMode" data-value="typing" class="${d.writing_mode==='typing'?'primary':''}" ${locked||photoBusy?'disabled':''}>网页打字</button><button data-action="writingMode" data-value="paper" class="${d.writing_mode==='paper'?'primary':''}" ${locked||photoBusy?'disabled':''}>纸上手写</button></div><div class="divider"></div>${d.writing_mode==='typing'?`<label for="writingText">Your writing</label><textarea id="writingText" class="field writing" placeholder="Write your answer here…" ${locked?'disabled':''} spellcheck="false">${esc(d.writing_text)}</textarea><p class="wordcount" id="wordCount">${words(d.writing_text)} words · 原题要求至少${g.minimum_words}词</p>`:photoFields(g,locked)}<button class="primary" data-action="${locked?'report':'review'}" ${photoBusy?'disabled':''}>${locked?'查看提交记录':'提交本场考试'}</button>${source(g)}</section>`;}
 async function addWritingPhoto(file){
-  if(!file||photoBusy||!parent||!profile||!model||find(ref)?.component!=='Writing'||model.draft(ref).submitted||model.draft(ref).writing_mode!=='paper')return;
+  if(!ensureExamEditable()||!file||photoBusy||!parent||!profile||!model||find(ref)?.component!=='Writing'||model.draft(ref).submitted||model.draft(ref).writing_mode!=='paper')return;
   const owner=parent.id,child=profile.id,task=ref,generation=authGeneration;photoBusy=true;render();
   const current=()=>parent?.id===owner&&profile?.id===child&&ref===task&&generation===authGeneration;
-  try{const photo=await KetWritingPhoto.prepare(file,task);if(!current()||model.draft(task).submitted)return;model.start(task);writingPhotos={...writingPhotos,[task]:photo};model.setPaperReady(task,true);queueCloud();saveStatus();toast('照片已添加，正在保存。');}
+  try{const photo=await KetWritingPhoto.prepare(file,task);if(!current()||model.draft(task).submitted||!ensureExamEditable())return;model.start(task);writingPhotos={...writingPhotos,[task]:photo};model.setPaperReady(task,true);queueCloud();saveStatus();toast('照片已添加，正在保存。');}
   catch(error){if(current())toast(error.message||'照片未保存，请重试。');}
   finally{if(current()){photoBusy=false;render();}}
 }
@@ -2273,6 +2368,7 @@ function words(s){return s.trim()?s.trim().split(/\s+/).length:0;}
 function modal(content){$('#modalBody').innerHTML=content;if(!$('#modal').open)$('#modal').showModal();}
 function closeModal(){privateFamilyLink=null;familyLinkRequest++;$('#modal').close();$('#modalBody').textContent='';}
 function review(){
+  if(currentExam())return reviewExam();
   if(view!=='task'||bankBusy)return;const g=find(ref),d=model.draft(ref);if(photoBusy)return;if(d.submitted)return actions.report();
   const missing=g.component==='Writing'?(countAnswered(g,d)?[]:g.question_numbers):g.question_numbers.filter(n=>!String(d.answers[n]||'').trim());
   if(!missing.length)return actions.submitGroup();
@@ -2308,11 +2404,15 @@ function childShareRecord(value){
 async function protectedJSON(path,body){const response=await auth.transport(path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});let data;try{data=await response.json();}catch(_){throw new Error('云端结果暂不可读取，请稍后重试。');}if(!response.ok){const error=new Error(response.status===403?'当前账号没有管理权限。':'云端查询未完成，请稍后重试。');error.code=typeof data.error==='string'?data.error:data.error?.code;error.status=response.status;throw error;}return data;}
 function scoreStatus(status){return ({SOURCE_KEY_MATCH:'与源键一致',SOURCE_KEY_MISMATCH:'与源键不一致',UNANSWERED:'未作答',PENDING_REVIEW:'待评',SOURCE_KEY_CHECKED:'已核对源键',NO_SUBMISSION:'未提交',NO_RECORD:'尚无作答',SCOPE_NOT_VERIFIED:'记录用途待核',SUBMITTED:'已提交',NOT_STARTED:'未开始',DRAFT:'未提交',NOT_SCORED:'待评'})[status]||'待评';}
 function resultPanel(result){
-  if(!ADMIN_ENTRY)return ''; // Scores are administrator-only, including direct calls.
-  if(!result||!result.summary)return '<section class="card"><h2>本次测评结果</h2><p class="note">待评：当前尚未取得与本次云端版本一致的结果。原始作答仍保留，不把未评分当作零分。</p>'+ (resultError?'<p class="warning">'+esc(resultError)+'</p>':'')+'</section>';
-  const summary=result.summary;
-  return `<section class="card"><h2>测评结果 · ${esc(scoreStatus(summary.status))}</h2><p>${Number.isInteger(summary.source_key_matches)?`${summary.source_key_matches}项与源键一致；${summary.pending_review||0}项待评；${summary.unanswered||0}项未作答。`:'当前证据不足以核定成绩，保留为待评。'} 已提交${summary.submitted_groups||0}组。</p><p class="quiet">这是实际作答与本地源答案的核对，不是官方KET分数、英语等级或通过概率。写作和口语尚未审核时保持待评。</p><div class="table-scroll"><table><thead><tr><th>题组</th><th>状态</th><th>核对结果</th></tr></thead><tbody>${(result.groups||[]).map(g=>`<tr><td>${esc(g.ref)} · ${esc(g.component)}</td><td>${esc(scoreStatus(g.status))}</td><td>${Number.isInteger(g.matched)?`${g.matched}项与源键一致；${g.pending_review||0}待评；${g.unanswered||0}空题`:'待评／尚未提交评分'}</td></tr>`).join('')}</tbody></table></div>${(result.limits||[]).length?'<details class="source"><summary>结果的适用范围</summary>'+result.limits.map(v=>'<p>'+esc(v)+'</p>').join('')+'</details>':''}</section>`;
+ if(!ADMIN_ENTRY)return '';
+ if(!result)return '<section class="card"><p>待评：尚无可核对结果。</p></section>';
+ return '<section class="card">'+KetAssessmentReport.render(result,adminDetail?.child?.name||'','parent')+'</section>';
 }
+function printAssessment(kind){
+ if(!ADMIN_ENTRY||!adminAllowed||!adminDetail)return;
+ document.getElementById('assessmentPrint')?.remove();const section=document.createElement('section');section.id='assessmentPrint';section.dataset.previousTitle=document.title;document.title=(kind==='teacher'?'教师评阅报告':'测评结果')+'-'+adminDetail.child.name;section.innerHTML=KetAssessmentReport.render(adminDetail.result,adminDetail.child.name,kind);document.body.append(section);window.print();
+}
+
 async function report(){
   const epoch=renderEpoch,id=profile.id,owner=parent.id,generation=authGeneration,instance=cloud;currentResult=null;resultError='';
   const current=()=>profile?.id===id&&parent?.id===owner&&generation===authGeneration&&view==='report'&&epoch===renderEpoch&&cloud===instance;
@@ -2329,7 +2429,7 @@ async function report(){
   if(!current())return;
   exportCache=await exportObject();if(!current())return;
   const record=exportCache,confirmed=receipt?.status==='SAVED_WITH_SUBMISSIONS'&&receipt.submitted_groups.length>0;
-  shell(`<div class="hero"><p class="eyebrow">YOUR SUBMISSION</p><h1>${resultError?'暂未提交成功':confirmed?'提交成功':receipt?.status==='NO_RECORD'?'作答记录':'进度已保存'}</h1>${confirmed?'<p>作答已交给老师。</p>':''}</div>${resultError?'<section class="card"><p class="warning" role="alert">'+esc(resultError)+'</p><button class="primary" data-action="report">重试提交</button><button data-action="exportPending">备份当前作答</button></section>':''}${confirmed?'<section class="card teacher-contact"><h2>联系老师</h2><div class="teacher-qr-slot" role="img" aria-label="二维码预留位置"></div></section>':''}<div class="row"><button class="primary" data-action="home">返回板块选择</button></div><details class="card"><summary>作答记录与备份</summary><div class="table-scroll"><table><thead><tr><th>题组</th><th>进度</th><th>操作</th></tr></thead><tbody>${submissionDisplayGroups().filter(g=>partCanOpen(g)).map(g=>`<tr><td>${g.component} · Part ${g.part} · Test ${g.test}</td><td>${statusText(g)}</td><td><button data-action="openGroup" data-value="${g.ref}">查看作答</button></td></tr>`).join('')}</tbody></table></div><div class="row"><button data-action="copy">复制作答</button><button data-action="exportTxt">下载TXT</button><button data-action="exportJson">下载JSON</button><button data-action="exportPending">导出未同步备份</button><button data-action="reloadCloud">载入云端进度</button></div><p id="copyMessage" class="muted"></p><textarea class="field export-preview" id="exportText" readonly aria-label="可复制的原始作答记录">${esc(exportText(record))}</textarea>${record.voice.length?'<h3>本机口语附件</h3>'+record.voice.map(v=>`<p>${esc(v.questionRef)} · <button data-action="exportVoice" data-value="${esc(v.questionRef)}">下载音频</button></p>`).join(''):''}${Object.keys(writingPhotos).length?'<h3>手写照片</h3>'+Object.entries(writingPhotos).map(([r,p])=>`<p>${r} · <button data-action="downloadWritingPhoto" data-value="${r}">下载手写照片</button></p>`).join(''):''}${record.voice.length?'<p class="quiet">录音仍保存在录制设备，尚未上传给老师。</p>':''}</details>`);
+  shell(`<div class="hero"><p class="eyebrow">YOUR SUBMISSION</p><h1>${resultError?'暂未提交成功':confirmed?'提交成功':receipt?.status==='NO_RECORD'?'作答记录':'进度已保存'}</h1>${confirmed?'<p>作答已交给老师。</p>':''}</div>${resultError?'<section class="card"><p class="warning" role="alert">'+esc(resultError)+'</p><button class="primary" data-action="report">重试提交</button><button data-action="exportPending">备份当前作答</button></section>':''}${confirmed?'<section class="card teacher-contact"><h2>联系老师</h2><div class="teacher-qr-slot" role="img" aria-label="二维码预留位置"></div></section>':''}<div class="row"><button class="primary" data-action="home">返回板块选择</button></div><details class="card"><summary>作答记录与备份</summary><div class="table-scroll"><table><thead><tr><th>题组</th><th>进度</th><th>操作</th></tr></thead><tbody>${submissionDisplayGroups().filter(g=>partCanOpen(g)).map(g=>`<tr><td>${g.component} · Part ${g.part} · Test ${g.test}</td><td>${statusText(g)}</td><td><button data-action="openGroup" data-value="${g.ref}">查看作答</button></td></tr>`).join('')}</tbody></table></div><div class="row"><button data-action="copy">复制作答</button><button data-action="exportTxt">下载TXT</button><button data-action="exportJson">下载JSON</button><button data-action="exportPending">导出未同步备份</button><button data-action="reloadCloud">载入云端进度</button></div><p id="copyMessage" class="muted"></p><textarea hidden id="exportText" readonly>${esc(exportText(record))}</textarea>${record.voice.length?'<h3>本机口语附件</h3>'+record.voice.map(v=>`<p>${esc(v.questionRef)} · <button data-action="exportVoice" data-value="${esc(v.questionRef)}">下载音频</button></p>`).join(''):''}${Object.keys(writingPhotos).length?'<h3>手写照片</h3>'+Object.entries(writingPhotos).map(([r,p])=>`<p>${r} · <button data-action="downloadWritingPhoto" data-value="${r}">下载手写照片</button></p>`).join(''):''}${record.voice.length?'<p class="quiet">录音仍保存在录制设备，尚未上传给老师。</p>':''}</details>`);
 }
 async function exportObject(){if(!parent||!profile||!model)throw new Error('请先登录并选择孩子，再导出作答。');const syncSnapshot={...cloudStatus};const result=model.exportObject(),who={id:profile.id,display_name:profile.name},listeningExport=listeningSession?listeningSession.export():{status:'NOT_PREPARED'};const metadata=await voice.exportMetadata(who.id),recordings=metadata.map(v=>{const task=DATA.speaking.find(s=>s.ref===v.taskRef),index=Math.max(0,Number(v.questionRef.split('-')[1])-1);return {...v,prompt:task?.child_prompts?.[index]?.text||task?.child_prompt||'',test:task?.test,part:task?.part,source:task?.source};});const speaking=Object.fromEntries(DATA.speaking.map(s=>{const a=recordings.filter(v=>v.taskRef===s.ref);return [s.ref,{status:a.length?'LOCAL_AUDIO_RECORDED':'not_started',saved_recordings:a.length,submitted_recordings:a.filter(v=>v.status==='submitted').length,scoring:'NOT_SCORED',interpretation_limit:'仅记录单题音频，不等同完整官方口语测评或互动能力结论。'}];}));return childShareRecord({...result,format:'KET_CHILD_CLOUD_EXPORT_1',scope:assessmentScope==='assessment'?'assessment':'UNVERIFIED',result_visibility:'ADMIN_ONLY',cloud:{child_id:who.id,content_version:DATA.content_version,sync:syncSnapshot},profile:who,voice:recordings,writing_photos:Object.fromEntries(Object.entries(writingPhotos).map(([r,p])=>[r,KetWritingPhoto.metadata(p)])),speaking,sources:groups.map(g=>({ref:g.ref,test:g.test,part:g.part,source:g.source})),listening:listeningExport,speaking_sources:DATA.speaking.map(s=>({ref:s.ref,test:s.test,part:s.part,source:s.source})),privacy:'分享文件仅含当前孩子的原始作答与来源，不含成绩或分析；原始作答文字保持不变。换设备续做需要家长的有效私密链接；可选录音仅本机，音频须另附。',speaking_limit:'录音提交是本机记录，不是口语评分，也不是已经交给GPT。'});}
 function exportText(r){const lines=['KET孩子原始作答记录','孩子：'+r.profile.display_name,'导出：'+r.exported_at,'记录用途：'+r.scope,r.privacy,''];for(const g of r.groups){lines.push(`${g.ref} / ${g.component} / ${g.status}`,`来源：${g.source}；PDF页 ${g.pdf_pages.join('、')}`);for(const n of g.question_numbers)lines.push(`Q${n}: ${g.answers[n]===null?(g.pending_attachment_question_numbers.includes(n)?(r.writing_photos?.[g.ref]?'已附手写照片，待评':'手写自报完成，照片尚未收到'):'未作答'):g.answers[n]}`);lines.push('未作答：'+(g.unanswered_question_numbers.join('、')||'无'),`见题：${g.context.seen}；帮助：${g.context.help}；条件：${g.context.effort}；备注：${g.context.notes}`,`首次作答：${g.started_at||'未记录'}；提交：${g.submitted_at||'未提交'}；时钟跨度：${g.elapsed_seconds??'未记录'}秒（包含暂停/后台）`,'');}for(const [task,photo]of Object.entries(r.writing_photos||{}))lines.push(task+'手写照片：'+photo.file_name+'；已附照片待评；需另附照片文件，不含在文字导出中。');lines.push('口语（声音须另附，不据文字猜测发音）：');r.voice.forEach(v=>lines.push(`${v.questionRef} / ${v.prompt} / ${v.status} / ${v.fileName} / ${v.durable?'本机持久保存':'仅本页临时保留'} / ${v.bytes} bytes`));const lc=r.listening?.first_submission||r.listening?.current;lines.push('听力原录音：'+(r.listening?.audio?.source_filename||'未取得'),lc?('播放器观察：play事件'+lc.play_event_count+'次；ended事件'+lc.ended_event_count+'次；最后位置'+(lc.last_position_seconds??'未知')+'秒；'+lc.playback_status):'尚无听力播放记录',lc?'听见/理解：均未验证；事件不证明完整收听或独立完成。':'听力尚未开始',r.listening?.persistence?.message||'',r.listening?.answer_submission_binding?.note||'',r.interpretation_limit,'此备份不含成绩或测评分析。');return lines.join('\n');}
@@ -2380,7 +2480,7 @@ async function adminMailRecovery(eventId){
 }
 function adminPage(){
   if(!ADMIN_ENTRY||!parent||!adminAllowed)return profilesPage();
-  shell(`<div class="hero"><p class="eyebrow">ASSESSMENT ADMIN</p><h1>孩子测评管理</h1><p>按家长手机号和孩子查找测评。其他模块练习不进入此处；未评分标待评，不作零分。</p></div><section class="card"><form id="adminQueryForm"><div class="row"><label style="flex:1">家长手机号<input class="field" id="adminAccount" type="search" autocomplete="off" value="${esc(adminQuery.account)}" placeholder="手机号，也可查询旧管理员账号"></label><label style="flex:1">孩子姓名<input class="field" id="adminChild" type="search" autocomplete="off" value="${esc(adminQuery.child)}" placeholder="孩子姓名或昵称"></label><button class="primary" type="submit" ${adminLoading?'disabled':''}>${adminLoading?'查询中…':'查询'}</button></div></form><p class="quiet">联系方式为登记者自报，不代表手机号实名认证。管理权限由服务端核实，不能通过填写手机号取得。</p>${adminError?'<p class="warning" role="alert">'+esc(adminError)+'</p>':''}<p>共${adminTotal}条，${adminRows.length?'当前第'+(adminOffset+1)+'—'+(adminOffset+adminRows.length)+'条':'当前无结果'}。</p><div class="table-scroll"><table><thead><tr><th>家长联系方式</th><th>孩子</th><th>测评进度</th><th>操作</th></tr></thead><tbody>${adminRows.map(r=>`<tr><td>${esc(r.contact_phone||r.contact_email||'未登记')}<small style="display:block">${esc(r.account_id)}</small></td><td>${esc(r.child_name||'尚未添加孩子')}</td><td>${r.record_meta?(r.record_meta.assessment_scope==='assessment'?'已提交'+(r.record_meta.submitted_group_count||0)+'组；评分见详情':'历史记录用途待核；不自动计入测评成绩'):'尚无测评作答'}</td><td>${r.child_id?'<button data-action="adminDetail" data-value="'+esc(r.child_id)+'" '+(adminLoading?'disabled':'')+'>查看作答与成绩</button>':''}</td></tr>`).join('')||'<tr><td colspan="4">'+(adminLoading?'正在查询…':'当前条件没有记录。')+'</td></tr>'}</tbody></table></div><div class="row"><button data-action="adminPrev" ${adminLoading||adminOffset===0?'disabled':''}>上一页</button><button data-action="adminNext" ${adminLoading||adminOffset+adminRows.length>=adminTotal?'disabled':''}>下一页</button><button data-action="adminListCsv" ${adminLoading||!adminRows.length?'disabled':''}>导出本页名单CSV</button></div></section>${adminDetail?`<section class="card"><h2>${esc(adminDetail.child?.name)}的测评</h2><p>家长手机号：${esc(adminDetail.contact_phone||adminDetail.contact_email||'未登记')} · 孩子引用：${esc(adminDetail.child?.id)}</p><div class="row"><button data-action="adminDetailJson">导出此孩子完整JSON</button><button data-action="adminDetailCsv">导出此孩子成绩CSV</button></div></section>${resultPanel(adminDetail.result)}<section class="card"><h2>实际作答详情</h2><p class="quiet">导出含原始作答、题源、作答条件、核对结果和待评项，不含答案键。</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:600px;overflow:auto">${esc(JSON.stringify(adminDetail,null,2))}</pre></section>`:''}${adminMailPanel()}<a href="${esc(CONFIG.siteUrl)}">返回孩子测评入口</a>`,false);
+  shell(`<div class="hero"><p class="eyebrow">ASSESSMENT ADMIN</p><h1>孩子测评管理</h1><p>按家长手机号和孩子查找测评。其他模块练习不进入此处；未评分标待评，不作零分。</p></div><section class="card"><form id="adminQueryForm"><div class="row"><label style="flex:1">家长手机号<input class="field" id="adminAccount" type="search" autocomplete="off" value="${esc(adminQuery.account)}" placeholder="手机号，也可查询旧管理员账号"></label><label style="flex:1">孩子姓名<input class="field" id="adminChild" type="search" autocomplete="off" value="${esc(adminQuery.child)}" placeholder="孩子姓名或昵称"></label><button class="primary" type="submit" ${adminLoading?'disabled':''}>${adminLoading?'查询中…':'查询'}</button></div></form><p class="quiet">联系方式为登记者自报，不代表手机号实名认证。管理权限由服务端核实，不能通过填写手机号取得。</p>${adminError?'<p class="warning" role="alert">'+esc(adminError)+'</p>':''}<p>共${adminTotal}条，${adminRows.length?'当前第'+(adminOffset+1)+'—'+(adminOffset+adminRows.length)+'条':'当前无结果'}。</p><div class="table-scroll"><table><thead><tr><th>家长联系方式</th><th>孩子</th><th>测评进度</th><th>操作</th></tr></thead><tbody>${adminRows.map(r=>`<tr><td>${esc(r.contact_phone||r.contact_email||'未登记')}</td><td>${esc(r.child_name||'尚未添加孩子')}</td><td>${r.record_meta?(r.record_meta.assessment_scope==='assessment'?'已提交'+(r.record_meta.submitted_group_count||0)+'组；评分见详情':'历史记录用途待核；不自动计入测评成绩'):'尚无测评作答'}</td><td>${r.child_id?'<button data-action="adminDetail" data-value="'+esc(r.child_id)+'" '+(adminLoading?'disabled':'')+'>查看作答与成绩</button>':''}</td></tr>`).join('')||'<tr><td colspan="4">'+(adminLoading?'正在查询…':'当前条件没有记录。')+'</td></tr>'}</tbody></table></div><div class="row"><button data-action="adminPrev" ${adminLoading||adminOffset===0?'disabled':''}>上一页</button><button data-action="adminNext" ${adminLoading||adminOffset+adminRows.length>=adminTotal?'disabled':''}>下一页</button><button data-action="adminListCsv" ${adminLoading||!adminRows.length?'disabled':''}>导出本页名单CSV</button></div></section>${adminDetail?`<section class="card"><h2>${esc(adminDetail.child?.name)}的测评</h2><p>家长手机号：${esc(adminDetail.contact_phone||adminDetail.contact_email||'未登记')}</p><div class="row"><button data-action="adminDetailJson">导出此孩子完整JSON</button><button data-action="adminDetailCsv">导出此孩子成绩CSV</button></div></section>${resultPanel(adminDetail.result)}<section class="card"><h2>报告与评阅</h2><div class="row"><button data-action="parentPdf">家长版PDF（打印保存）</button><button data-action="teacherPdf">教师版PDF（打印保存）</button></div><details><summary>教师逐题对照</summary>${KetAssessmentReport.render(adminDetail.result,adminDetail.child?.name,'teacher')}</details></section>`:''}${adminMailPanel()}<a href="${esc(CONFIG.siteUrl)}">返回孩子测评入口</a>`,false);
 }
 async function queryAdmin(offset=0){
   if(!ADMIN_ENTRY||!parent||!adminAllowed||adminLoading)return;
@@ -2442,7 +2542,7 @@ async retryFamilySession(){
 },
 async admin(){if(!ADMIN_ENTRY||blockedNav()||!parent||!adminAllowed)return;const owner=parent.id;await openProfiles();if(parent?.id!==owner||profile||!adminAllowed)return;view='admin';render();await queryAdmin(0);},
 adminMailTest(){return adminMail('test');},adminMailStatus(){return adminMail('status');},adminMailRecovery:b=>adminMailRecovery(b.dataset.value),
-adminPrev(){return queryAdmin(Math.max(0,adminOffset-50));},adminNext(){return queryAdmin(adminOffset+50);},adminDetail:b=>loadAdminDetail(b.dataset.value),adminListCsv(){adminExport('list');},adminDetailJson(){adminExport('json');},adminDetailCsv(){adminExport('csv');},
+adminPrev(){return queryAdmin(Math.max(0,adminOffset-50));},adminNext(){return queryAdmin(adminOffset+50);},adminDetail:b=>loadAdminDetail(b.dataset.value),adminListCsv(){adminExport('list');},parentPdf(){printAssessment('parent');},teacherPdf(){printAssessment('teacher');},adminDetailJson(){adminExport('json');},adminDetailCsv(){adminExport('csv');},
 async retryCloud(){cloudLoading=true;cloudError='';render();await startCloud();},
 async retrySync(){if(!queueCloud())return;await cloud.flush();saveStatus();},
 exportPending(){const pending=cloud.exportPending();const p=profile&&model?{format:'KET_UNSYNCED_REVIEW_BACKUP',parent_id:parent?.id,child_id:profile.id,content_version:DATA.content_version,in_memory:cloudPayload(),pending}:pending;if(!p){toast('当前没有未同步备份。');return;}download(new Blob([JSON.stringify(childShareRecord(p),null,2)],{type:'application/json'}),'KET-unsynced-backup.json');},
@@ -2479,12 +2579,12 @@ exportRetained(){const values=[...retainedBackups.values()].filter(value=>value.
 
 
 downloadWritingPhoto(b){const photo=writingPhotos[b.dataset.value];if(photo)download(KetWritingPhoto.blob(photo),photo.file_name);},
-profiles:openProfiles,enter:(b)=>enter(b.dataset.value),home(){if(blockedNav())return;if(!profile)return openProfiles();view='home';render();},intro(){if(blockedNav())return;view='intro';render();},tutorial(){if(blockedNav())return;view='tutorial';render();},introDone(){ui.introDone=true;persistUI();view='tutorial';render();},tutorialDone(){ui.tutorialDone=true;persistUI();view='home';render();},module:b=>openModule(b.dataset.value),
+beginExam,saveCurrent,reviewExam,finishExam(){return finishExam(false);},examPart(b){if(blockedNav())return;const e=currentExam();if(!e?.refs.includes(b.dataset.value))return;ref=b.dataset.value;module=find(ref).component;qi=Number(ui['q_'+ref])||0;view='task';render();},profiles:openProfiles,enter:(b)=>enter(b.dataset.value),home(){if(blockedNav())return;if(!profile)return openProfiles();view='home';render();},intro(){if(blockedNav())return;view='intro';render();},tutorial(){if(blockedNav())return;view='tutorial';render();},introDone(){ui.introDone=true;persistUI();view='tutorial';render();},tutorialDone(){ui.tutorialDone=true;persistUI();view='home';render();},module:b=>openModule(b.dataset.value),
 demoChoice(b){$('#demoChoices').querySelectorAll('button').forEach(x=>x.classList.toggle('selected',x===b));$('#demoMessage').textContent='已选择'+b.textContent.trim()+'。这只是操作演示。';},
-answer(b){if(view!=='task'||bankBusy||model.draft(ref).submitted)return;model.start(ref);model.setAnswer(ref,find(ref).questions[qi].number,b.dataset.value);render();},prev(){qi--;render();},next(){qi++;render();},jump(b){qi=+b.dataset.value;closeModal();render();},review,
+answer(b){if(view!=='task'||bankBusy||model.draft(ref).submitted||!ensureExamEditable())return;model.start(ref);model.setAnswer(ref,find(ref).questions[qi].number,b.dataset.value);render();},prev(){qi--;render();},next(){qi++;render();},jump(b){qi=+b.dataset.value;closeModal();render();},review,
 close:closeModal,submitGroup(){if(view!=='task'||bankBusy||photoBusy)return;if(model.draft(ref).submitted)return actions.report();if(find(ref).component==='Listening'&&!listeningCanSubmit()){toast('请先正常播放这组配套录音。');return;}model.start(ref);hydrating=true;try{const snap=model.submit(ref);if(find(ref).component==='Listening')listeningSession.freeze(snap.submitted_at);}finally{hydrating=false;queueCloud();}closeModal();saveStatus();view='report';render();toast('正在提交作答。');},
-openGroup(b){if(blockedNav())return;const g=find(b.dataset.value);if(!g||!partCanOpen(g)){toast('新题组由系统安排。');return;}if(!model.draft(g.ref).submitted)return openModule(g.component);ref=g.ref;module=g.component;if(module==='Listening')listeningPart=g.part;qi=Number(ui['q_'+ref])||0;view='task';render();},
-writingMode(b){if(view!=='task'||bankBusy||photoBusy||model.draft(ref).submitted)return;model.start(ref);model.setWritingMode(ref,b.dataset.value);render();},report(){if(blockedNav())return;closeModal();save();view='report';render();},
+openGroup(b){if(blockedNav())return;const g=find(b.dataset.value);if(!g||!partCanOpen(g)){toast('新题组由系统安排。');return;}if(!model.draft(g.ref).submitted){const e=Object.values(examSessions).find(s=>s.refs.includes(g.ref));if(!e){toast('这是旧版未交作答，已保留备份，不并入新考试。');return;}ref=g.ref;module=g.component;qi=0;view='task';render();return;}ref=g.ref;module=g.component;if(module==='Listening')listeningPart=g.part;qi=Number(ui['q_'+ref])||0;view='task';render();},
+writingMode(b){if(view!=='task'||bankBusy||photoBusy||model.draft(ref).submitted||!ensureExamEditable())return;model.start(ref);model.setWritingMode(ref,b.dataset.value);render();},report(){if(blockedNav())return;closeModal();save();view='report';render();},
 listeningPart(b){if(blockedNav())return;const part=Number(b.dataset.value);if(![1,2,3,4,5].includes(part))return;listeningPart=part;render();},
 async startListening(){if(listeningPart!==2||!listeningReady(find(ref)))return;const player=$('#listenPlayer');if(!player)return;try{await player.play();}catch(_){toast('未能开始播放，请点播放器重试。');}},reviewListening(){if(!model.draft(ref).submitted&&!listeningCanSubmit()){toast('请先正常播放这组配套录音。');return;}review();},
 record,stopRecord,async cancelMic(){await recorder.cancel();pendingMic=false;capture=null;render();toast('已取消等待；如稍后授权到达，也会立即释放麦克风。');},
@@ -2496,9 +2596,10 @@ legacy(){let raw;try{raw=localStorage.getItem('ket-encrypted-family-mirror-v1');
 
 document.addEventListener('click',guarded(async e=>{const b=e.target.closest('[data-action]');if(!b||b.disabled)return;e.preventDefault();const fn=actions[b.dataset.action];if(fn)await fn(b);}));
 document.addEventListener('submit',guarded(async e=>{if(e.target.id==='authForm'){e.preventDefault();await submitAuth();return;}if(e.target.id==='adminQueryForm'){e.preventDefault();if(!ADMIN_ENTRY||!parent||!adminAllowed||adminLoading)return;adminQuery={account:($('#adminAccount')?.value||'').trim(),child:($('#adminChild')?.value||'').trim()};await queryAdmin(0);return;}if(e.target.id!=='profileForm')return;e.preventDefault();await enter(null,$('#profileName').value);}));
-document.addEventListener('input',guarded(e=>{const t=e.target;if(['authEmail','authPhone','authChildName'].includes(t.id)){if(t.id==='authEmail')authEmail=t.value;else if(t.id==='authPhone')authPhone=t.value;else authChildName=t.value;updateAuthControls();return;}if(!model||view!=='task'||bankBusy)return;if(t.dataset.listeningAnswer){if(!listeningCanSubmit()||model.draft(ref).submitted)return;model.start(ref);model.setAnswer(ref,Number(t.dataset.listeningAnswer),t.value);saveStatus();}if(t.id==='wordAnswer'){model.start(ref);model.setAnswer(ref,find(ref).questions[qi].number,t.value);saveStatus();}if(t.id==='writingText'){model.start(ref);model.setWritingText(ref,t.value);$('#wordCount').textContent=words(t.value)+' words · 原题要求至少'+find(ref).minimum_words+'词';saveStatus();}}));
+document.addEventListener('input',guarded(e=>{const t=e.target;if(['authEmail','authPhone','authChildName'].includes(t.id)){if(t.id==='authEmail')authEmail=t.value;else if(t.id==='authPhone')authPhone=t.value;else authChildName=t.value;updateAuthControls();return;}if(!model||view!=='task'||bankBusy)return;if(!ensureExamEditable()){render();return;}if(t.dataset.listeningAnswer){if(!listeningCanSubmit()||model.draft(ref).submitted)return;model.start(ref);model.setAnswer(ref,Number(t.dataset.listeningAnswer),t.value);saveStatus();}if(t.id==='wordAnswer'){model.start(ref);model.setAnswer(ref,find(ref).questions[qi].number,t.value);saveStatus();}if(t.id==='writingText'){model.start(ref);model.setWritingText(ref,t.value);$('#wordCount').textContent=words(t.value)+' words · 原题要求至少'+find(ref).minimum_words+'词';saveStatus();}updateExamProgress();}));
 document.addEventListener('change',guarded(async e=>{const t=e.target;if(['paperCamera','paperFile'].includes(t.id)){await addWritingPhoto(t.files?.[0]);return;}if(t.id==='speakSelect'){if(blockedNav()){t.value=ref;return;}ref=t.value;qi=0;render();}if(t.id==='audioFile'&&t.files[0]){const f=t.files[0];if(!/^audio\//.test(f.type)&&! /\.(m4a|mp3|wav|webm|ogg|mp4)$/i.test(f.name)){toast('请选择实际音频文件。');t.value='';return;}if(f.size>100*1024*1024){toast('音频大于100MB，请先缩短录音；当前文件未保存。');return;}const p=profile.id,task=ref,question=voiceQuestion();const r=await voice.saveDraft({profileId:p,taskRef:task,questionRef:question,blob:f,mimeType:f.type,fileName:f.name,durationSeconds:null});if(profile?.id===p&&ref===task&&voiceQuestion()===question){await refreshVoice();render();toast(r.message);}}}));
 window.addEventListener('beforeunload',e=>{if(photoBusy||recording||pendingMic||stopping||hasVolatileBackups()||cloudQueueError||['pending','offline','conflict'].includes(cloudStatus.state)||(cloudStatus.state==='auth_expired'&&cloud?.exportPending()?.pending)){e.preventDefault();e.returnValue='仍有未同步内容或仅在本页的备份，请先保存或导出。';}});
+window.addEventListener('afterprint',()=>{const p=document.getElementById('assessmentPrint');if(p){document.title=p.dataset.previousTitle;p.remove();}});
 window.addEventListener('pageshow',()=>{if(!parent&&!profile)updateAuthControls();});
 window.addEventListener('hashchange',()=>{resumeChecked=false;startCloud();});
 window.addEventListener('pagehide',()=>{if(model)model.save();if(recorder.isRecording())recorder.cancel();clearInterval(timer);releaseURL();});
