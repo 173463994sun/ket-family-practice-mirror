@@ -2004,7 +2004,7 @@ function bankPick(component){
 }
 function partLabel(g){return `Part ${g.part} · Test ${g.test}`;}
 const voice=KetLocal.createVoiceStore();let recorder=KetLocal.createRecorder();
-let roleTurn=0;
+let roleTurn=0,spokenEntry='Speaking';
 const spokenGuide=KetSpokenGuide.create({onState(state){const node=$('#spokenStatus');if(node)node.textContent=({NOT_PLAYED:'先听提问，再录音回答。',QUEUED:'准备朗读…',SPEAKING:'电脑正在说话…',ENDED:'轮到你了，点击录音回答。',CANCELLED:'已停止朗读。',ERROR:'朗读未完成，请重试或看题回答。',UNAVAILABLE:'当前浏览器不支持朗读，可看题录音。',LOCAL_ENGLISH_VOICE_UNAVAILABLE:'本机英文语音尚未就绪，可重试朗读或先看题录音。'})[state.status]||'';}});
 let profile=null, model=null, ui={}, view='profiles', module='Reading', ref='R1', qi=0, voiceRecords=[], audioURL=null, recording=false, pendingMic=false, stopping=false, capture=null, timer=null, recordStarted=0, exportCache=null, renderEpoch=0, enterEpoch=0, listeningSession=null;
 const CONFIG=JSON.parse(document.getElementById('cloudConfig').textContent);
@@ -2228,7 +2228,7 @@ function shell(content,nav=true){
   const screen=[view,profile?.id||'',view==='task'?module:''].join('|');
   if(renderedScreen!==screen){renderedScreen=screen;globalThis.requestAnimationFrame?.(()=>globalThis.scrollTo?.({top:0,left:0,behavior:'instant'}));}
 }
-function tabs(){return `<nav class="tabs" aria-label="四个测评板块">${[['Listening','听力'],['Speaking','口语'],['Reading','阅读'],['Writing','写作']].map(([m,cn])=>`<button data-action="module" data-value="${m}" class="${view==='task'&&module===m?'active':''}" ${view==='task'&&module===m?'aria-current="page"':''}>${m}<small>${cn}</small></button>`).join('')}</nav>`;}
+function tabs(){return `<nav class="tabs" aria-label="四个测评板块">${[['Listening','听力'],['Speaking','口语'],['Reading','阅读'],['Writing','写作']].map(([m,cn])=>`<button data-action="module" data-value="${m}" class="${view==='task'&&(module==='Speaking'?spokenEntry:module)===m?'active':''}" ${view==='task'&&(module==='Speaking'?spokenEntry:module)===m?'aria-current="page"':''}>${m}<small>${cn}</small></button>`).join('')}</nav>`;}
 function currentState(g){return model.getState().groups[g.ref]||null;}
 function countAnswered(g,d){if(!d)return 0;if(g.component==='Writing')return d.writing_mode==='paper'?(writingPhotos[g.ref]?1:0):(d.writing_text.trim()?1:0);return g.question_numbers.filter(n=>!!d.answers[String(n)]?.trim()).length;}
 function statusText(g){const d=currentState(g);return !d?'未开始':d.submitted?'已提交':`${countAnswered(g,d)}/${g.question_numbers.length} 已作答`;}
@@ -2295,8 +2295,8 @@ function bankPage(){
 }
 async function openModule(m){
  if(blockedNav()||!profile||!model||!['Reading','Writing','Listening','Speaking'].includes(m))return;
- if(m==='Listening'){module=m;view='componentUnavailable';render();return;}
- if(m==='Speaking')return openSpokenPhase('S1');
+ if(m==='Listening'){spokenEntry='Listening';module=m;view='componentUnavailable';render();return;}
+ if(m==='Speaking'){spokenEntry='Speaking';return openSpokenPhase('S1');}
  const operation=++bankOperation,owner=parent?.id,child=profile.id,generation=authGeneration,instance=cloud;
  const current=()=>operation===bankOperation&&parent?.id===owner&&profile?.id===child&&authGeneration===generation&&cloud===instance;
  module=m;view='bank';bankBusy=true;bankError='';bankEmpty=false;render();
