@@ -1,21 +1,19 @@
-# KET family assessment
+# Sunny KET assessment
 
-This interface update separates choosing a skill, explicitly resuming an active
-Reading & Writing paper, and viewing previous answers. A child can return from
-Listening or guided speaking to the module menu without submitting or erasing
-unfinished work. Speaking offers both stages. The existing paired Test 2
-Listening Part 2 recording/task is reachable as a single component activity;
-it is not presented as a complete official Listening examination.
+Listening now opens the existing paired Test 2 Part 2 recording and its five
+original questions directly. Other Parts are clearly folded read-only paper
+previews, with a return to the answerable group. The original complete Listening
+recording set is still incomplete; no generated audio replaces missing originals.
 
-Previous answers now include unfinished, submitted, and archived task records
-from the currently selected child. Historical previews are read-only, keep
-original answer labels, and expose neither marking keys nor results. Local
-recordings remain on the recording device and can be downloaded there.
+Reading/Writing retain the original fixed full papers and shared 60-minute clock.
+Existing response identities, protected first submissions, cloud access controls,
+marking keys, teacher-only result visibility and mail behavior are unchanged.
 
-Complete same-paper Reading & Writing Parts 1–7 retain their shared 60-minute
-clock, protected first submissions, private cloud saves, and teacher-only result
-emails. Leaving the task menu does not pause or reset the clock. No backend,
-source question data, answer key, or existing response is changed in this release.
+The public share.html page and wechat-poster.png are family-approved promotion
+assets with a public entry QR only. No family resume key, contact details, private
+records or child responses are embedded. The poster states that only one original
+Listening group is currently available. No official certification is claimed.
 
-Local automated checks and synthetic browser navigation passed. This release did
-not write real child data, send email, or newly verify physical iPad operation.
+Local tests and synthetic browser playback/input/navigation passed. This release
+made no real child response writes and sent no email. Physical iPad and WeChat
+scanning/recording were not newly tested.
