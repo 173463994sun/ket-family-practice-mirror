@@ -17,3 +17,7 @@ Listening group is currently available. No official certification is claimed.
 Local tests and synthetic browser playback/input/navigation passed. This release
 made no real child response writes and sent no email. Physical iPad and WeChat
 scanning/recording were not newly tested.
+
+## Minimal clarifications
+
+Speaking recordings are device-local and do not sync to other devices or reach a teacher automatically; download and deliver them separately. This limitation is now explicit in the activity, share page, and poster. Listening preview instructions use each source Part’s actual question range. Original audio remains incomplete; no generated replacement has been added.
